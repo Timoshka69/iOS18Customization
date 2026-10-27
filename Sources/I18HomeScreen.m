@@ -85,11 +85,33 @@ static BOOL I18BoolCall(id target, NSString *selectorName) {
     return ((BOOL (*)(id, SEL))objc_msgSend)(target, sel);
 }
 
-static BOOL I18IsWidgetIconView(UIView *iconView) {
+static const void *kWidgetKey = &kWidgetKey;
+
+static BOOL I18DetectWidget(UIView *iconView) {
     id icon = I18Call(iconView, @"icon");
-    if (!icon) return NO;
-    if (I18BoolCall(icon, @"isWidgetIcon") || I18BoolCall(icon, @"isWidgetStackIcon")) return YES;
-    return I18ClassNameContains(icon, @"Widget");
+    if (icon) {
+        if (I18BoolCall(icon, @"isWidgetIcon") || I18BoolCall(icon, @"isWidgetStackIcon")) return YES;
+        if (I18ClassNameContains(icon, @"Widget")) return YES;
+    }
+    // Widgets are shown through a custom view controller instead of an image.
+    if (I18Call(iconView, @"customIconImageViewController")) return YES;
+    if (I18ClassNameContains(iconView, @"Widget")) return YES;
+    // A home screen icon is never wider than ~90 pt; widgets are.
+    if (iconView.bounds.size.width > 110.0) return YES;
+    return NO;
+}
+
+static BOOL I18IsWidgetIconView(UIView *iconView) {
+    if (!iconView) return NO;
+    BOOL widget = I18DetectWidget(iconView);
+    objc_setAssociatedObject(iconView, kWidgetKey, @(widget), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return widget;
+}
+
+/// Cheap check for hot paths (frame hooks): uses the last detection.
+static BOOL I18KnownWidget(UIView *iconView) {
+    NSNumber *value = objc_getAssociatedObject(iconView, kWidgetKey);
+    return value ? value.boolValue : I18IsWidgetIconView(iconView);
 }
 
 static BOOL I18IsLabel(UIView *view) {
@@ -181,7 +203,8 @@ static NSArray<UIView *> *I18IconViewParts(UIView *iconView, UIView *imageView) 
 static CGFloat I18TargetScale(UIView *imageView) {
     if (![I18Settings shared].largeIcons) return 1.0;
     UIView *iconView = I18IconViewContaining(imageView);
-    return (iconView && I18IsLargeEligible(iconView)) ? kLargeIconScale : 1.0;
+    if (!iconView || I18KnownWidget(iconView)) return 1.0;
+    return I18IsLargeEligible(iconView) ? kLargeIconScale : 1.0;
 }
 
 static IMP oIV_setFrame, oIV_setBounds, oIV_setCenter, oIV_setTransform;
@@ -464,6 +487,37 @@ static void I18StyleClockParts(CALayer *layer, CGFloat rootArea, BOOL dark, int 
     }
 }
 
+/// Widgets are drawn by another process; they pick light or dark from the
+/// traits of their host view controller. Overriding only the view is not
+/// enough, so the override goes onto every view controller in the widget.
+static void I18SetStyle(id object, BOOL dark) {
+    if (![object respondsToSelector:@selector(setOverrideUserInterfaceStyle:)]) return;
+    UIUserInterfaceStyle current = ((UIUserInterfaceStyle (*)(id, SEL))objc_msgSend)(object, @selector(overrideUserInterfaceStyle));
+    if (dark) {
+        if (current != UIUserInterfaceStyleDark) {
+            ((void (*)(id, SEL, UIUserInterfaceStyle))objc_msgSend)(object, @selector(setOverrideUserInterfaceStyle:), UIUserInterfaceStyleDark);
+            objc_setAssociatedObject(object, kDarkOverrideKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    } else if (objc_getAssociatedObject(object, kDarkOverrideKey)) {
+        ((void (*)(id, SEL, UIUserInterfaceStyle))objc_msgSend)(object, @selector(setOverrideUserInterfaceStyle:), UIUserInterfaceStyleUnspecified);
+        objc_setAssociatedObject(object, kDarkOverrideKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+static void I18ForceWidgetAppearanceIn(UIView *view, BOOL dark, int depth) {
+    if (!view || depth > 7) return;
+    UIResponder *next = view.nextResponder;
+    if ([next isKindOfClass:[UIViewController class]]) I18SetStyle(next, dark);
+    for (UIView *sub in view.subviews) {
+        I18ForceWidgetAppearanceIn(sub, dark, depth + 1);
+    }
+}
+
+static void I18ForceWidgetAppearance(UIView *part, BOOL dark) {
+    I18SetStyle(part, dark);
+    I18ForceWidgetAppearanceIn(part, dark, 0);
+}
+
 static void I18TintBadgeColor(float rgb[3]) {
     I18Settings *settings = [I18Settings shared];
     float tint[3];
@@ -507,8 +561,8 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
     I18Settings *settings = [I18Settings shared];
     I18Look look = I18CurrentLook();
     BOOL tinted = look == I18LookTinted;
-    BOOL large = settings.largeIcons && I18IsLargeEligible(iconView);
     BOOL widget = I18IsWidgetIconView(iconView);
+    BOOL large = settings.largeIcons && !widget && I18IsLargeEligible(iconView);
 
     float rgb[3];
     [settings tintRGB:rgb];
@@ -532,15 +586,7 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
             if (imageView) I18ShiftCornerView(part, imageView, NO);
         } else if (widget) {
             I18SetMatrixFilter(part.layer, (tinted && homeWidget) ? &widgetMatrix : NULL);
-            if (darkWidget) {
-                if (part.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) {
-                    part.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-                    objc_setAssociatedObject(part, kDarkOverrideKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                }
-            } else if (objc_getAssociatedObject(part, kDarkOverrideKey)) {
-                part.overrideUserInterfaceStyle = UIUserInterfaceStyleUnspecified;
-                objc_setAssociatedObject(part, kDarkOverrideKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            }
+            I18ForceWidgetAppearance(part, darkWidget);
         }
     }
 }

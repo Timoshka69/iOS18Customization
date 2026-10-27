@@ -8,9 +8,8 @@
 //      Add Widget   -> runs the stock "+" action (widget gallery)
 //      Customize    -> opens the customization panel
 //
-//  A transparent menu button is laid over the "+" for that. If the "+" can
-//  not be found on some build, a small "Customize" pill is shown instead so
-//  the panel is always reachable.
+//  A transparent tap area is laid over the "+" for that; the menu opens on a
+//  single tap.
 //
 
 #import "I18Shared.h"
@@ -73,59 +72,253 @@ static BOOL I18FireStockAction(UIView *view, int depth) {
     return NO;
 }
 
-static UIMenu *I18MakeMenu(UIView *host) {
-    __weak UIView *weakHost = host;
-    UIImage *widgetImage = [UIImage systemImageNamed:@"plus.square.on.square"];
-    UIImage *brushImage = [UIImage systemImageNamed:@"paintbrush.pointed"] ?: [UIImage systemImageNamed:@"paintbrush"];
-
-    UIAction *addWidget = [UIAction actionWithTitle:I18L(@"AddWidget") image:widgetImage identifier:nil handler:^(__unused UIAction *action) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIView *stock = weakHost;
-            if (I18FireStockAction(stock, 0)) return;
-            // The action may live on a container of the "+" view.
-            UIView *parent = stock.superview;
-            for (int level = 0; parent && level < 2; level++, parent = parent.superview) {
-                if ([parent isKindOfClass:[UIControl class]] || parent.gestureRecognizers.count) {
-                    if (I18FireGestures(parent)) return;
-                    if ([parent isKindOfClass:[UIControl class]]) {
-                        [(UIControl *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
-                        return;
-                    }
-                }
-            }
-        });
-    }];
-    UIAction *customize = [UIAction actionWithTitle:I18L(@"Customize") image:brushImage identifier:nil handler:^(__unused UIAction *action) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [[I18Panel shared] show];
-        });
-    }];
-    return [UIMenu menuWithTitle:@"" children:@[addWidget, customize]];
+static void I18AddWidget(UIView *stock) {
+    if (I18FireStockAction(stock, 0)) return;
+    // The action may live on a container of the "+" view.
+    UIView *parent = stock.superview;
+    for (int level = 0; parent && level < 2; level++, parent = parent.superview) {
+        if (I18FireGestures(parent)) return;
+        if ([parent isKindOfClass:[UIControl class]]) {
+            [(UIControl *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
+            return;
+        }
+    }
 }
 
-#pragma mark - Transparent menu button over the "+"
+#pragma mark - The menu
 
-@interface I18MenuOverlay : UIButton
+/// Small menu in the style of the iOS context menu that opens on a single
+/// tap (a UIButton menu needed a long press inside SpringBoard's edit mode,
+/// because SpringBoard's own gestures swallow the short tap).
+@interface I18PlusMenu : NSObject
++ (instancetype)shared;
+- (void)showBelowView:(UIView *)anchor;
+- (void)dismiss;
 @end
 
-@implementation I18MenuOverlay
-- (instancetype)initWithHost:(UIView *)host {
-    if ((self = [super initWithFrame:host.bounds])) {
-        self.backgroundColor = UIColor.clearColor;
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        self.showsMenuAsPrimaryAction = YES;
-        self.menu = I18MakeMenu(host);
-        self.accessibilityLabel = host.accessibilityLabel;
+@interface I18PlusMenuWindow : UIWindow
+@end
+
+@implementation I18PlusMenuWindow
+- (BOOL)_canAffectStatusBarAppearance {
+    return NO;
+}
+- (BOOL)canBecomeKeyWindow {
+    return NO;
+}
+@end
+
+@interface I18PlusMenuRow : UIControl
+@property (nonatomic, copy) void (^action)(void);
+- (instancetype)initWithTitle:(NSString *)title symbol:(NSString *)symbol;
+@end
+
+@implementation I18PlusMenuRow {
+    UILabel *_title;
+    UIImageView *_icon;
+    UIView *_highlight;
+}
+
+- (instancetype)initWithTitle:(NSString *)title symbol:(NSString *)symbol {
+    if ((self = [super initWithFrame:CGRectZero])) {
+        _highlight = [[UIView alloc] init];
+        _highlight.userInteractionEnabled = NO;
+        _highlight.alpha = 0.0;
+        _highlight.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+            return traits.userInterfaceStyle == UIUserInterfaceStyleDark ? [UIColor colorWithWhite:1.0 alpha:0.12] : [UIColor colorWithWhite:0.0 alpha:0.08];
+        }];
+        [self addSubview:_highlight];
+
+        _title = [[UILabel alloc] init];
+        _title.text = title;
+        _title.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightRegular];
+        _title.textColor = UIColor.labelColor;
+        _title.userInteractionEnabled = NO;
+        [self addSubview:_title];
+
+        UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:17.0 weight:UIImageSymbolWeightRegular];
+        _icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
+        _icon.tintColor = UIColor.labelColor;
+        _icon.contentMode = UIViewContentModeCenter;
+        _icon.userInteractionEnabled = NO;
+        [self addSubview:_icon];
+        self.accessibilityLabel = title;
+        [self addTarget:self action:@selector(fire) forControlEvents:UIControlEventTouchUpInside];
     }
     return self;
 }
 
-// Show the stock "+" pressed state while the finger is down.
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGSize size = self.bounds.size;
+    _highlight.frame = self.bounds;
+    _icon.frame = CGRectMake(size.width - 16.0 - 26.0, 0, 26.0, size.height);
+    _title.frame = CGRectMake(16.0, 0, size.width - 16.0 - 50.0, size.height);
+}
+
 - (void)setHighlighted:(BOOL)highlighted {
     [super setHighlighted:highlighted];
-    if ([self.superview isKindOfClass:[UIControl class]]) {
-        ((UIControl *)self.superview).highlighted = highlighted;
+    _highlight.alpha = highlighted ? 1.0 : 0.0;
+}
+
+- (void)fire {
+    if (self.action) self.action();
+}
+@end
+
+@implementation I18PlusMenu {
+    I18PlusMenuWindow *_window;
+    UIView *_card;
+    __weak UIView *_anchor;
+}
+
++ (instancetype)shared {
+    static I18PlusMenu *menu;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        menu = [[I18PlusMenu alloc] init];
+    });
+    return menu;
+}
+
+- (void)showBelowView:(UIView *)anchor {
+    UIWindow *home = anchor.window;
+    UIWindowScene *scene = home.windowScene;
+    if (!home || !scene) return;
+    if (_window) [self dismissAnimated:NO];
+    _anchor = anchor;
+
+    _window = [[I18PlusMenuWindow alloc] initWithWindowScene:scene];
+    _window.frame = home.screen.bounds;
+    _window.windowLevel = home.windowLevel + 4.0;
+    _window.backgroundColor = UIColor.clearColor;
+
+    UIControl *catcher = [[UIControl alloc] initWithFrame:_window.bounds];
+    catcher.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [catcher addTarget:self action:@selector(dismiss) forControlEvents:UIControlEventTouchDown];
+    [_window addSubview:catcher];
+
+    CGFloat rowHeight = 44.0;
+    CGFloat width = MIN(250.0, _window.bounds.size.width - 32.0);
+    _card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, rowHeight * 2.0 + 0.5)];
+    _card.layer.shadowColor = UIColor.blackColor.CGColor;
+    _card.layer.shadowOpacity = 0.22f;
+    _card.layer.shadowRadius = 18.0;
+    _card.layer.shadowOffset = CGSizeMake(0, 6);
+
+    UIVisualEffectView *material = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+    material.frame = _card.bounds;
+    material.layer.cornerRadius = 13.0;
+    material.layer.cornerCurve = kCACornerCurveContinuous;
+    material.clipsToBounds = YES;
+    [_card addSubview:material];
+
+    __weak I18PlusMenu *weakSelf = self;
+    __weak UIView *weakAnchor = anchor;
+    I18PlusMenuRow *addWidget = [[I18PlusMenuRow alloc] initWithTitle:I18L(@"AddWidget") symbol:@"plus.square.on.square"];
+    addWidget.frame = CGRectMake(0, 0, width, rowHeight);
+    addWidget.action = ^{
+        [weakSelf dismissAnimated:YES];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            I18AddWidget(weakAnchor);
+        });
+    };
+    [material.contentView addSubview:addWidget];
+
+    UIView *separator = [[UIView alloc] initWithFrame:CGRectMake(0, rowHeight, width, 0.5)];
+    separator.backgroundColor = UIColor.separatorColor;
+    [material.contentView addSubview:separator];
+
+    NSString *brush = [UIImage systemImageNamed:@"paintbrush.pointed"] ? @"paintbrush.pointed" : @"paintbrush";
+    I18PlusMenuRow *customize = [[I18PlusMenuRow alloc] initWithTitle:I18L(@"Customize") symbol:brush];
+    customize.frame = CGRectMake(0, rowHeight + 0.5, width, rowHeight);
+    customize.action = ^{
+        [weakSelf dismissAnimated:YES];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[I18Panel shared] show];
+        });
+    };
+    [material.contentView addSubview:customize];
+    [_window addSubview:_card];
+
+    // Below the "+", left aligned with it, kept on screen.
+    CGRect anchorFrame = [anchor convertRect:anchor.bounds toView:nil];
+    anchorFrame = [home convertRect:anchorFrame toWindow:nil];
+    CGFloat x = MAX(12.0, MIN(CGRectGetMinX(anchorFrame), _window.bounds.size.width - width - 12.0));
+    CGFloat y = CGRectGetMaxY(anchorFrame) + 8.0;
+    _card.layer.anchorPoint = CGPointMake(0.1, 0.0);
+    _card.center = CGPointMake(x + width * 0.1, y);
+
+    _window.hidden = NO;
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    _card.alpha = 0.0;
+    _card.transform = CGAffineTransformMakeScale(0.4, 0.4);
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0
+                        options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        self->_card.alpha = 1.0;
+        self->_card.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+- (void)dismiss {
+    [self dismissAnimated:YES];
+}
+
+- (void)dismissAnimated:(BOOL)animated {
+    UIWindow *window = _window;
+    UIView *card = _card;
+    _window = nil;
+    _card = nil;
+    if (!window) return;
+    if (!animated) {
+        window.hidden = YES;
+        return;
     }
+    [UIView animateWithDuration:0.18 animations:^{
+        card.alpha = 0.0;
+        card.transform = CGAffineTransformMakeScale(0.85, 0.85);
+    } completion:^(__unused BOOL finished) {
+        window.hidden = YES;
+    }];
+}
+@end
+
+#pragma mark - Transparent tap area over the "+"
+
+@interface I18MenuOverlay : UIView <UIGestureRecognizerDelegate>
+- (instancetype)initWithHost:(UIView *)host;
+@end
+
+@implementation I18MenuOverlay {
+    __weak UIView *_host;
+}
+
+- (instancetype)initWithHost:(UIView *)host {
+    if ((self = [super initWithFrame:host.bounds])) {
+        _host = host;
+        self.backgroundColor = UIColor.clearColor;
+        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        self.accessibilityLabel = host.accessibilityLabel;
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)];
+        tap.delegate = self;
+        [self addGestureRecognizer:tap];
+    }
+    return self;
+}
+
+- (void)tapped {
+    UIView *anchor = _host ?: self;
+    [[I18PlusMenu shared] showBelowView:anchor];
+}
+
+// SpringBoard has its own tap and long-press recognizers on the home screen.
+// Ours has to win on the "+", so the others wait for it to fail.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
+    return YES;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+    return NO;
 }
 @end
 
