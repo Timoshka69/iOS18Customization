@@ -159,45 +159,108 @@ static void fx_lift(const float in[3], float minV, float out[3]) {
 #pragma mark - background sampling
 
 typedef struct {
-    float mean[3];
-    float dev;
-    int count;
-} fx_band;
+    float base[3];
+    float slope[3];
+    float inliers;   // share of ring pixels that match the model
+    float residual;  // mean distance of those pixels to the model
+} fx_plate;
 
-static fx_band fx_sample(const uint8_t *px, int bpr, int xa, int xb, int ya, int yb) {
-    fx_band band;
-    memset(&band, 0, sizeof(band));
-    if (xb < xa) xb = xa;
-    if (yb < ya) yb = ya;
-    double sum[3] = {0, 0, 0};
+static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, int bh, fx_plate *out) {
+    int inner = (int)(bw * 0.025f), outer = (int)(bw * 0.085f);
+    int innerY = (int)(bh * 0.025f), outerY = (int)(bh * 0.085f);
+    if (outer <= inner) outer = inner + 1;
+    if (outerY <= innerY) outerY = innerY + 1;
+
+    int capacity = 2 * (outer - inner + 1) * bh + 2 * (outerY - innerY + 1) * bw + 16;
+    float *samples = malloc(sizeof(float) * 4 * (size_t)capacity);
+    if (!samples) return false;
     int n = 0;
-    for (int y = ya; y <= yb; y++) {
+    unsigned int hist[3][256];
+    memset(hist, 0, sizeof(hist));
+
+    for (int y = by0; y < by0 + bh; y++) {
+        int dy = y - by0, dyb = by0 + bh - 1 - y;
+        bool rowBand = (dy >= innerY && dy <= outerY) || (dyb >= innerY && dyb <= outerY);
         const uint8_t *row = px + (size_t)y * bpr;
-        for (int x = xa; x <= xb; x++) {
+        for (int x = bx0; x < bx0 + bw; x++) {
+            int dx = x - bx0, dxb = bx0 + bw - 1 - x;
+            bool colBand = (dx >= inner && dx <= outer) || (dxb >= inner && dxb <= outer);
+            // inside the frame band, but not deeper than the band on the other axis
+            bool inFrame = (rowBand && dx >= inner && dxb >= inner) || (colBand && dy >= innerY && dyb >= innerY);
+            if (!inFrame || n >= capacity) continue;
             const uint8_t *p = row + x * 4;
             if (p[3] < 250) continue;
             float c[3];
             fx_load(p, c);
-            sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2];
+            float *s = samples + n * 4;
+            s[0] = c[0]; s[1] = c[1]; s[2] = c[2];
+            s[3] = (float)dy / (float)bh;
+            for (int i = 0; i < 3; i++) hist[i][(int)(c[i] * 255.0f + 0.5f)]++;
             n++;
         }
     }
-    if (n == 0) return band;
-    for (int i = 0; i < 3; i++) band.mean[i] = (float)(sum[i] / n);
-    double dev = 0;
-    for (int y = ya; y <= yb; y++) {
-        const uint8_t *row = px + (size_t)y * bpr;
-        for (int x = xa; x <= xb; x++) {
-            const uint8_t *p = row + x * 4;
-            if (p[3] < 250) continue;
-            float c[3];
-            fx_load(p, c);
-            dev += fx_dist(c, band.mean);
+    if (n < 24) {
+        free(samples);
+        return false;
+    }
+
+    // Start from the per-channel median (robust against the glyph).
+    float base[3], slope[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++) {
+        unsigned int acc = 0;
+        int v = 0;
+        for (; v < 256; v++) {
+            acc += hist[i][v];
+            if (acc * 2 >= (unsigned int)n) break;
+        }
+        base[i] = v / 255.0f;
+    }
+
+    float inlierShare = 0.0f, residual = 1.0f;
+    for (int pass = 0; pass < 4; pass++) {
+        double st = 0, stt = 0, sc[3] = {0, 0, 0}, stc[3] = {0, 0, 0}, dist = 0;
+        int m = 0;
+        float limit = pass == 0 ? 0.16f : 0.11f;
+        for (int k = 0; k < n; k++) {
+            const float *s = samples + k * 4;
+            float model[3] = {base[0] + slope[0] * s[3], base[1] + slope[1] * s[3], base[2] + slope[2] * s[3]};
+            float d = fx_dist(s, model);
+            if (d > limit) continue;
+            m++;
+            dist += d;
+            st += s[3];
+            stt += s[3] * s[3];
+            for (int i = 0; i < 3; i++) {
+                sc[i] += s[i];
+                stc[i] += s[3] * s[i];
+            }
+        }
+        if (m < 16) {
+            inlierShare = (float)m / (float)n;
+            break;
+        }
+        inlierShare = (float)m / (float)n;
+        residual = (float)(dist / m);
+        double denom = m * stt - st * st;
+        for (int i = 0; i < 3; i++) {
+            if (fabs(denom) < 1e-6) {
+                slope[i] = 0.0f;
+                base[i] = (float)(sc[i] / m);
+            } else {
+                slope[i] = (float)((m * stc[i] - st * sc[i]) / denom);
+                base[i] = (float)((sc[i] - slope[i] * st) / m);
+            }
         }
     }
-    band.dev = (float)(dev / n);
-    band.count = n;
-    return band;
+    free(samples);
+
+    for (int i = 0; i < 3; i++) {
+        out->base[i] = base[i];
+        out->slope[i] = slope[i];
+    }
+    out->inliers = inlierShare;
+    out->residual = residual;
+    return true;
 }
 
 #pragma mark - one icon
@@ -231,62 +294,39 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
     if (bw < 12 || bh < 12) return I18FXUntouched;
 
-#define FX_X(f) (bx0 + (int)((f) * bw))
-#define FX_Y(f) (by0 + (int)((f) * bh))
-    fx_band top    = fx_sample(px, bpr, FX_X(0.30f), FX_X(0.70f), FX_Y(0.04f), FX_Y(0.10f));
-    fx_band bottom = fx_sample(px, bpr, FX_X(0.30f), FX_X(0.70f), FX_Y(0.90f), FX_Y(0.96f));
-    fx_band left   = fx_sample(px, bpr, FX_X(0.04f), FX_X(0.10f), FX_Y(0.30f), FX_Y(0.70f));
-    fx_band right  = fx_sample(px, bpr, FX_X(0.90f), FX_X(0.96f), FX_Y(0.30f), FX_Y(0.70f));
-#undef FX_X
-#undef FX_Y
-
-    // Not enough solid pixels near the edge: this is not a regular icon
-    // (progress pie, highlight overlay, odd shapes). Leave it alone.
-    if (top.count < 3 || bottom.count < 3) return I18FXUntouched;
-
-    float topL = fx_luma(top.mean), bottomL = fx_luma(bottom.mean);
-    if (topL < 0.26f && bottomL < 0.26f) return I18FXUntouched; // already dark
+    // Plate model: colour = base + slope * t, t = 0 at the top edge and 1 at
+    // the bottom. It is fitted to a ring just inside the icon edge with
+    // outliers thrown away, so glyphs that run close to the edge (Safari's
+    // compass, the Photos flower, the Mail envelope) do not spoil it.
+    fx_plate plate;
+    if (!fx_fit_plate(px, bpr, bx0, by0, bw, bh, &plate)) return I18FXUntouched;
 
     float mid[3];
-    for (int i = 0; i < 3; i++) mid[i] = (top.mean[i] + bottom.mean[i]) * 0.5f;
-
-    float maxDev = fmaxf(top.dev, bottom.dev);
-    float sideDist = 0.0f;
-    if (left.count >= 3) { maxDev = fmaxf(maxDev, left.dev); sideDist = fmaxf(sideDist, fx_dist(left.mean, mid)); }
-    if (right.count >= 3) { maxDev = fmaxf(maxDev, right.dev); sideDist = fmaxf(sideDist, fx_dist(right.mean, mid)); }
-
-    bool uniform = maxDev < 0.065f && sideDist < 0.13f;
-
-    // Plate with a coloured strip (Notes: yellow top, white body). If the
-    // sides agree with one end, that end is the plate and the strip is
-    // treated like part of the glyph.
-    if (!uniform && left.count >= 3 && right.count >= 3 && left.dev < 0.065f && right.dev < 0.065f) {
-        const fx_band *ends[2] = {&bottom, &top};
-        for (int e = 0; e < 2 && !uniform; e++) {
-            const fx_band *end = ends[e];
-            if (end->dev < 0.065f && fx_dist(left.mean, end->mean) < 0.10f && fx_dist(right.mean, end->mean) < 0.10f) {
-                top.mean[0] = bottom.mean[0] = end->mean[0];
-                top.mean[1] = bottom.mean[1] = end->mean[1];
-                top.mean[2] = bottom.mean[2] = end->mean[2];
-                for (int i = 0; i < 3; i++) mid[i] = end->mean[i];
-                uniform = true;
-            }
-        }
+    for (int i = 0; i < 3; i++) mid[i] = plate.base[i] + plate.slope[i] * 0.5f;
+    float topC[3], bottomC[3];
+    for (int i = 0; i < 3; i++) {
+        topC[i] = plate.base[i];
+        bottomC[i] = plate.base[i] + plate.slope[i];
     }
-    if (!uniform) return fx_dim(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.42f : 0.62f);
+    if (plate.inliers >= 0.5f && fx_luma(topC) < 0.26f && fx_luma(bottomC) < 0.26f) {
+        return I18FXUntouched; // already dark
+    }
+    if (plate.inliers < 0.5f || plate.residual > 0.06f) {
+        // Busy artwork (maps, photos): keep it, just make it dark.
+        return fx_dim(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.30f : 0.55f);
+    }
 
     float bgL = fx_luma(mid), bgS = fx_sat(mid);
     bool lightPlate = bgL > 0.70f && bgS < 0.20f;
     bool grayPlate = bgS < 0.12f;
 
-    float topY = by0 + 0.07f * bh, bottomY = by0 + 0.93f * bh;
     for (int y = y0; y < y0 + h; y++) {
         uint8_t *row = px + (size_t)y * bpr;
-        float t = fx_clamp((y - topY) / (bottomY - topY));
+        float t = fx_clamp((float)(y - by0) / (float)bh);
         float bg[3] = {
-            fx_lerp(top.mean[0], bottom.mean[0], t),
-            fx_lerp(top.mean[1], bottom.mean[1], t),
-            fx_lerp(top.mean[2], bottom.mean[2], t),
+            fx_clamp(plate.base[0] + plate.slope[0] * t),
+            fx_clamp(plate.base[1] + plate.slope[1] * t),
+            fx_clamp(plate.base[2] + plate.slope[2] * t),
         };
         float plateL = fx_luma(bg);
         float darkV = fx_lerp(I18_DARK_TOP, I18_DARK_BOTTOM, fx_clamp((float)(y - by0) / (float)bh));

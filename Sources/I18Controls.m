@@ -24,7 +24,7 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
     if ((self = [super initWithFrame:CGRectZero])) {
         _track = [[UIView alloc] init];
         _track.userInteractionEnabled = NO;
-        _track.backgroundColor = I18Dynamic([UIColor colorWithWhite:0.0 alpha:0.07], [UIColor colorWithWhite:1.0 alpha:0.08]);
+        _track.backgroundColor = I18Dynamic([UIColor colorWithWhite:0.0 alpha:0.10], [UIColor colorWithWhite:1.0 alpha:0.08]);
         [self addSubview:_track];
 
         _pill = [[UIView alloc] init];
@@ -85,7 +85,7 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
 }
 
 - (void)updateShadow {
-    _pill.layer.shadowOpacity = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? 0.0f : 0.12f;
+    _pill.layer.shadowOpacity = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? 0.0f : 0.20f;
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previous {
@@ -153,6 +153,7 @@ static const CGFloat kThumbSize = 28.0;
         _track.startPoint = CGPointMake(0.0, 0.5);
         _track.endPoint = CGPointMake(1.0, 0.5);
         _track.cornerCurve = kCACornerCurveContinuous;
+        _track.borderWidth = 0.5;
         [self.layer addSublayer:_track];
 
         _thumb = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kThumbSize, kThumbSize)];
@@ -194,6 +195,21 @@ static const CGFloat kThumbSize = 28.0;
     _track.cornerRadius = kTrackHeight * 0.5;
     [CATransaction commit];
     [self placeThumb];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previous {
+    [super traitCollectionDidChange:previous];
+    [self updateTrackBorder];
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [self updateTrackBorder];
+}
+
+- (void)updateTrackBorder {
+    BOOL dark = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    _track.borderColor = [UIColor colorWithWhite:dark ? 1.0 : 0.0 alpha:dark ? 0.06 : 0.10].CGColor;
 }
 
 - (void)placeThumb {

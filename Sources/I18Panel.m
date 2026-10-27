@@ -198,16 +198,15 @@ static const NSInteger kLoupeCells = 9;
 #pragma mark - Panel
 
 // Metrics follow the iOS 18 customization sheet.
-static const CGFloat kCardInset = 8.0;      // gap between the sheet and the screen edges
 static const CGFloat kCardRadius = 32.0;
-static const CGFloat kSide = 16.0;          // inner padding of the sheet
+static const CGFloat kSide = 18.0;          // inner padding of the sheet
 static const CGFloat kTopRowY = 12.0;
 static const CGFloat kTopRowHeight = 34.0;
 static const CGFloat kTilesGap = 14.0;
 static const CGFloat kCaptionHeight = 17.0;
 static const CGFloat kSliderHeight = 30.0;
 static const CGFloat kSliderGap = 14.0;
-static const CGFloat kBottomPadding = 20.0;
+static const CGFloat kBottomPadding = 24.0;
 
 @interface I18Panel () <UIGestureRecognizerDelegate>
 @end
@@ -286,6 +285,7 @@ static const CGFloat kBottomPadding = 20.0;
     _material.clipsToBounds = YES;
     _material.layer.cornerRadius = kCardRadius;
     _material.layer.cornerCurve = kCACornerCurveContinuous;
+    _material.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
     [_card addSubview:_material];
 
     _cardPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(cardPanned:)];
@@ -364,16 +364,19 @@ static const CGFloat kBottomPadding = 20.0;
 }
 
 - (void)layoutCard {
+    // The sheet spans the full width and sits on the bottom edge of the
+    // screen; only its top corners are rounded.
     CGRect bounds = _root.bounds;
-    CGFloat bottomInset = MAX(_window.safeAreaInsets.bottom - 8.0, 0.0);
-    CGFloat width = bounds.size.width - 2.0 * kCardInset;
+    CGFloat bottomInset = _window.safeAreaInsets.bottom;
+    CGFloat width = bounds.size.width;
     CGFloat iconSize = [self iconSizeForWidth:width];
     BOOL tint = [self showsTintControls];
 
-    _cardHeight = [self contentHeightWithTint:tint iconSize:iconSize];
+    _cardHeight = [self contentHeightWithTint:tint iconSize:iconSize] + bottomInset;
     _card.bounds = CGRectMake(0, 0, width, _cardHeight);
-    _card.center = CGPointMake(bounds.size.width * 0.5, bounds.size.height - kCardInset - bottomInset - _cardHeight * 0.5);
-    _material.frame = CGRectMake(0, 0, width, _cardHeight);
+    _card.center = CGPointMake(bounds.size.width * 0.5, bounds.size.height - _cardHeight * 0.5);
+    // Runs past the bottom edge, so nothing shows through while dragging down.
+    _material.frame = CGRectMake(0, 0, width, _cardHeight + 80.0);
 
     CGFloat rowMid = kTopRowY + kTopRowHeight * 0.5;
     _sunButton.frame = CGRectMake(kSide - 8.0, rowMid - 20.0, 40.0, 40.0);

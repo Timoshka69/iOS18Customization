@@ -31,6 +31,7 @@ static const void *kStyledGenerationKey = &kStyledGenerationKey;
 static const void *kImageGenerationKey = &kImageGenerationKey;
 static const void *kLabelMaskKey = &kLabelMaskKey;
 static const void *kShiftKey = &kShiftKey;
+static const void *kDarkOverrideKey = &kDarkOverrideKey;
 static const void *kOriginalGravityKey = &kOriginalGravityKey;
 
 static NSString *const kOriginalBackgroundKey = @"i18OriginalBackground";
@@ -121,6 +122,21 @@ static BOOL I18ComputeLargeEligible(UIView *iconView) {
         if (I18ClassNameContains(view, @"Library")) return NO;
     }
     return NO;
+}
+
+/// Home screen pages, dock and Today view. The widget gallery, App Library
+/// and other sheets are excluded from widget tinting.
+static BOOL I18IsHomeLocation(UIView *iconView) {
+    id location = I18Call(iconView, @"location") ?: I18Call(iconView, @"iconLocation");
+    if ([location isKindOfClass:[NSString class]]) {
+        NSString *name = location;
+        return [name hasPrefix:@"SBIconLocationRoot"] || [name rangeOfString:@"Dock"].location != NSNotFound ||
+               [name rangeOfString:@"Today"].location != NSNotFound;
+    }
+    for (UIView *view = iconView.superview; view; view = view.superview) {
+        if (I18ClassNameContains(view, @"AddWidget") || I18ClassNameContains(view, @"Gallery") || I18ClassNameContains(view, @"Library")) return NO;
+    }
+    return YES;
 }
 
 static BOOL I18IsLargeEligible(UIView *iconView) {
@@ -499,7 +515,12 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
     float badgeRGB[3];
     I18TintBadgeColor(badgeRGB);
     I18FXMatrix badgeMatrix = I18FXBadgeTintMatrix(badgeRGB);
-    I18FXMatrix widgetMatrix = I18FXWidgetTintMatrix(rgb, !settings.systemIsDark);
+    // Widgets are switched to their dark appearance in the dark looks (like
+    // iOS 18) and tinted by brightness, never inverted: inverting turned
+    // photos into negatives and flipped night-time weather widgets.
+    I18FXMatrix widgetMatrix = I18FXWidgetTintMatrix(rgb, false);
+    BOOL homeWidget = widget && I18IsHomeLocation(iconView);
+    BOOL darkWidget = homeWidget && look != I18LookStock;
 
     for (UIView *part in I18IconViewParts(iconView, imageView)) {
         if (I18IsLabel(part)) {
@@ -510,7 +531,16 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
         } else if (I18IsCloseBox(part)) {
             if (imageView) I18ShiftCornerView(part, imageView, NO);
         } else if (widget) {
-            I18SetMatrixFilter(part.layer, tinted ? &widgetMatrix : NULL);
+            I18SetMatrixFilter(part.layer, (tinted && homeWidget) ? &widgetMatrix : NULL);
+            if (darkWidget) {
+                if (part.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) {
+                    part.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+                    objc_setAssociatedObject(part, kDarkOverrideKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            } else if (objc_getAssociatedObject(part, kDarkOverrideKey)) {
+                part.overrideUserInterfaceStyle = UIUserInterfaceStyleUnspecified;
+                objc_setAssociatedObject(part, kDarkOverrideKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
         }
     }
 }
@@ -546,7 +576,6 @@ static void I18SweepView(UIView *view, int depth) {
     if (gIconViewClass && [view isKindOfClass:gIconViewClass]) {
         [gIconViews addObject:view];
         I18StyleIconView(view, YES, NO);
-        return;
     } else if (gIconImageViewClass && [view isKindOfClass:gIconImageViewClass]) {
         [gImageViews addObject:view];
         I18StyleImageView(view);
