@@ -1,0 +1,14 @@
+Package: com.timoshka69.ios18customization
+Name: iOS18Customization
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: iOS 18 home screen customization for iOS 15: Light, Dark, Auto and Tinted icons, tinted widgets, small or large icons. Long-press the home screen, tap "Edit" and choose "Customize".
+Maintainer: Timoshka69
+Author: Timoshka69
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 15.0), firmware (<< 16.0)
+Icon: https://raw.githubusercontent.com/Timoshka69/iOS18Customization/main/assets/icon.png
+Header: https://raw.githubusercontent.com/Timoshka69/iOS18Customization/main/assets/banner.png
+SileoDepiction: https://raw.githubusercontent.com/Timoshka69/iOS18Customization/main/depiction/sileo.json
+Depiction: https://github.com/Timoshka69/iOS18Customization
+Homepage: https://github.com/Timoshka69/iOS18Customization

@@ -1,0 +1,77 @@
+{
+  "minVersion": "0.1",
+  "class": "DepictionTabView",
+  "headerImage": "https://raw.githubusercontent.com/Timoshka69/iOS18Customization/main/assets/banner.png",
+  "tintColor": "#7B5CFF",
+  "tabs": [
+    {
+      "tabname": "Описание",
+      "class": "DepictionStackView",
+      "views": [
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Кастомизация iOS 18 на iOS 15",
+          "useBoldText": true,
+          "useBottomMargin": true
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "Зажми пустое место на рабочем столе → **Изменить** → **Кастомизация**.\n\n- **Светлые / Тёмные / Авто / Цвет** — как в iOS 18\n- Цветные иконки, папки, бейджи и **виджеты**\n- **Малые / Крупные** иконки (крупные без подписей)\n- Два ползунка цвета и **пипетка** с обоев\n- Затемнение обоев\n\nВсё применяется сразу, без респринга. Настроек в «Настройках» нет — всё с рабочего стола."
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Версия",
+          "text": "1.0.0"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "iOS",
+          "text": "15.0 – 15.8.x"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Джейлбрейк",
+          "text": "Dopamine, palera1n (rootless / rootful)"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Разработчик",
+          "text": "Timoshka69"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionTableButtonView",
+          "title": "Исходный код на GitHub",
+          "action": "https://github.com/Timoshka69/iOS18Customization",
+          "openExternal": true
+        },
+        {
+          "class": "DepictionTableButtonView",
+          "title": "Сообщить о проблеме",
+          "action": "https://github.com/Timoshka69/iOS18Customization/issues",
+          "openExternal": true
+        }
+      ]
+    },
+    {
+      "tabname": "Изменения",
+      "class": "DepictionStackView",
+      "views": [
+        {
+          "class": "DepictionSubheaderView",
+          "title": "1.0.0",
+          "useBoldText": true
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- Первый релиз: панель кастомизации, тёмные и цветные иконки, цветные виджеты, крупные иконки, пипетка, затемнение обоев."
+        }
+      ]
+    }
+  ]
+}
