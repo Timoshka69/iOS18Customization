@@ -1,0 +1,81 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build rootless + rootful
+    runs-on: macos-latest
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          brew update --quiet || true
+          brew install ldid make dpkg xz || brew upgrade ldid make dpkg xz || true
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Get Theos
+        run: git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS"
+
+      - name: Get iOS SDK
+        run: |
+          # Xcode's own SDK works as well, this one is just a known-good fallback.
+          git clone --depth=1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/theos-sdks
+          git -C /tmp/theos-sdks sparse-checkout set iPhoneOS16.5.sdk
+          mkdir -p "$THEOS/sdks"
+          if [ -d /tmp/theos-sdks/iPhoneOS16.5.sdk ]; then mv /tmp/theos-sdks/iPhoneOS16.5.sdk "$THEOS/sdks/"; fi
+          ls "$THEOS/sdks"
+
+      - name: Show toolchain
+        run: |
+          make --version | head -n 1
+          xcrun --sdk iphoneos --show-sdk-version
+          clang --version | head -n 1
+
+      - name: Build rootless (Dopamine)
+        run: |
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+          mkdir -p out
+          mv packages/*.deb "out/iOS18Customization_$(grep '^Version:' control | cut -d' ' -f2)_rootless_iphoneos-arm64.deb"
+          rm -rf packages .theos
+
+      - name: Build rootful
+        run: |
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=
+          mv packages/*.deb "out/iOS18Customization_$(grep '^Version:' control | cut -d' ' -f2)_rootful_iphoneos-arm.deb"
+          rm -rf packages .theos
+
+      - name: Check packages
+        run: |
+          for deb in out/*.deb; do
+            echo "== $deb"
+            dpkg-deb --info "$deb"
+            dpkg-deb --contents "$deb"
+          done
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOS18Customization
+          path: out/*.deb
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.deb
+          generate_release_notes: true
