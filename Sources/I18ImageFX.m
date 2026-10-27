@@ -437,11 +437,14 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     if (!plateFound) {
         // Busy artwork (Maps, games): keep it recognisable, just a bit darker.
         // In Tinted it becomes a mid-tone instead of a black square.
-        return fx_dim(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.62f : 0.80f);
+        return fx_dim(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.48f : 0.80f);
     }
 
     float bgL = fx_luma(mid), bgS = fx_sat(mid);
-    bool lightPlate = bgL > 0.70f && bgS < 0.20f;
+    // White plates (Calendar, Reminders, Photos): black text turns light.
+    // Silver gradient plates (Settings, Camera) are grey plates: their glyph
+    // keeps its shading, flipping it made them look like negatives.
+    bool lightPlate = bgL > 0.84f && bgS < 0.20f;
     bool grayPlate = !lightPlate && bgS < 0.12f;
     uint8_t *keep = (flags & I18FXFlagKeepGlyph) ? NULL : fx_enclosed_islands(px, bpr, x0, y0, w, h, bx0, by0, bw, bh, &plate);
 
@@ -488,7 +491,7 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
                 // only brighter - never flip it, that looked like an inverted icon.
                 float lifted[3];
                 fx_lift(c, 0.62f, lifted);
-                float g = fx_clamp(0.30f + 0.66f * L);
+                float g = fx_clamp(0.36f + 0.62f * L);
                 for (int i = 0; i < 3; i++) f[i] = fx_lerp(lifted[i], g, neutral);
             } else {
                 // Coloured plate: white glyph takes the plate colour (Messages,

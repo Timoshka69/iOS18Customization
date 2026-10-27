@@ -8,6 +8,7 @@
 //
 
 #import "I18Shared.h"
+#include <notify.h>
 
 NSString *const I18SettingsDidChangeNotification = @"I18SettingsDidChangeNotification";
 
@@ -40,14 +41,24 @@ static NSString *const kDimKey = @"DimWallpaper";
             kLargeKey: @NO,
             kDimKey: @NO,
         }];
-        NSInteger style = [_defaults integerForKey:kStyleKey];
-        _style = (style >= I18StyleLight && style <= I18StyleTinted) ? (I18Style)style : I18StyleLight;
-        _hue = [self clamp:[_defaults doubleForKey:kHueKey]];
-        _tone = [self clamp:[_defaults doubleForKey:kToneKey]];
-        _largeIcons = [_defaults boolForKey:kLargeKey];
-        _dimWallpaper = [_defaults boolForKey:kDimKey];
+        [self readValues];
     }
     return self;
+}
+
+- (void)readValues {
+    NSInteger style = [_defaults integerForKey:kStyleKey];
+    _style = (style >= I18StyleLight && style <= I18StyleTinted) ? (I18Style)style : I18StyleLight;
+    _hue = [self clamp:[_defaults doubleForKey:kHueKey]];
+    _tone = [self clamp:[_defaults doubleForKey:kToneKey]];
+    _largeIcons = [_defaults boolForKey:kLargeKey];
+    _dimWallpaper = [_defaults boolForKey:kDimKey];
+}
+
+- (void)reload {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)I18_BUNDLE_ID);
+    [_defaults synchronize];
+    [self readValues];
 }
 
 - (CGFloat)clamp:(CGFloat)value {
@@ -146,6 +157,18 @@ static UIUserInterfaceStyle gObservedStyle = UIUserInterfaceStyleUnspecified;
 }
 
 @end
+
+void I18PostChangedNotification(void) {
+    // Coalesced: the sliders call this many times a second.
+    static BOOL pending;
+    if (pending) return;
+    pending = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        pending = NO;
+        CFPreferencesAppSynchronize((__bridge CFStringRef)I18_BUNDLE_ID);
+        notify_post(I18_CHANGED_NOTIFICATION);
+    });
+}
 
 #pragma mark - Localisation
 

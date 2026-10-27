@@ -4,7 +4,8 @@
 //
 //  iOS 18 home screen customization for iOS 15:
 //  Light / Dark / Auto / Tinted icons, tinted widgets and badges,
-//  small or large icons, wallpaper dimming and the iOS 18 "Edit" menu.
+//  small or large icons, wallpaper dimming and the iOS 18 "+" menu.
+//  In the Settings app the list icons follow the chosen look.
 //
 
 #import "I18Shared.h"
@@ -13,6 +14,10 @@
 __attribute__((constructor)) static void I18Initialize(void) {
     @autoreleasepool {
         NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
+        if ([bundle isEqualToString:@"com.apple.Preferences"]) {
+            I18InstallSettingsAppHooks();
+            return;
+        }
         if (![bundle isEqualToString:@"com.apple.springboard"]) return;
 
         I18InstallHomeScreenHooks();

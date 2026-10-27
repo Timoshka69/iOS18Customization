@@ -156,25 +156,6 @@ static void I18Managed_insertRelative(CALayer *self, SEL _cmd, CALayer *layer, C
     I18AdoptInsertedLayer(self, layer);
 }
 
-static BOOL I18IsOurFilter(id filter) {
-    return [I18ValueForKey(filter, @"name") isEqual:kFilterName];
-}
-
-/// SpringBoard sets its own filters on icon image views now and then (for
-/// example when the screen turns off and on again). Whatever it sets, our
-/// tint filter is kept at the end of the list, so an icon can never lose
-/// its colour or keep an old one.
-static void I18Managed_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
-    NSMutableArray *list = [NSMutableArray array];
-    for (id filter in filters) {
-        if (!I18IsOurFilter(filter)) [list addObject:filter];
-    }
-    id desired = objc_getAssociatedObject(self, kDesiredFilterKey);
-    if (desired) [list addObject:desired];
-    struct objc_super sup = {self, I18UnmanagedSuperclass(self)};
-    ((void (*)(struct objc_super *, SEL, NSArray *))objc_msgSendSuper)(&sup, _cmd, list.count ? list : nil);
-}
-
 static Class I18Managed_class(id self, SEL _cmd) {
     return I18UnmanagedSuperclass(self);
 }
@@ -192,7 +173,6 @@ static Class I18ManagedClassFor(Class base) {
     class_addMethod(managed, @selector(insertSublayer:atIndex:), (IMP)I18Managed_insertAtIndex, "v@:@I");
     class_addMethod(managed, @selector(insertSublayer:below:), (IMP)I18Managed_insertRelative, "v@:@@");
     class_addMethod(managed, @selector(insertSublayer:above:), (IMP)I18Managed_insertRelative, "v@:@@");
-    class_addMethod(managed, NSSelectorFromString(@"setFilters:"), (IMP)I18Managed_setFilters, "v@:@");
     class_addMethod(managed, @selector(class), (IMP)I18Managed_class, "#@:");
     objc_registerClassPair(managed);
     return managed;
@@ -245,6 +225,8 @@ void I18AdoptLayerTree(CALayer *layer, BOOL clock) {
     }
 }
 
+static void I18VerifyTintFilter(CALayer *layer);
+
 static void I18VerifyLayer(CALayer *layer, int depth) {
     if (!layer || depth > 6) return;
     if (I18IsManagedClass(object_getClass(layer))) {
@@ -255,14 +237,11 @@ static void I18VerifyLayer(CALayer *layer, int depth) {
             // or they belong to another look: run them through again.
             if (wanted != shown) layer.contents = shown;
         }
-        id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);
-        NSArray *filters = I18ValueForKey(layer, @"filters");
-        BOOL hasDesired = NO;
-        for (id filter in filters) {
-            if (filter == desired) hasDesired = YES;
-        }
-        if (desired && !hasDesired) [layer setValue:filters forKey:@"filters"];
     }
+    // Any layer that carries our tint (the icon itself, an old image view
+    // SpringBoard keeps inside a cross-fade, a copy for an animation) must
+    // show the current colour, never the one it was given earlier.
+    I18VerifyTintFilter(layer);
     for (CALayer *sublayer in [layer.sublayers copy]) {
         I18VerifyLayer(sublayer, depth + 1);
     }
@@ -305,6 +284,15 @@ typedef struct CAColorMatrix {
     float m41, m42, m43, m44, m45;
 } CAColorMatrix;
 
+static const void *kTintKindKey = &kTintKindKey;
+static const void *kTintGenerationKey = &kTintGenerationKey;
+static const void *kOurFilterKey = &kOurFilterKey;
+
+static NSHashTable<CALayer *> *gTintedLayers;
+static NSUInteger gTintGeneration = 1;
+static BOOL gFilterPassthrough;
+static IMP oL_setFilters;
+
 static NSValue *I18ColorMatrixValue(I18FXMatrix matrix) {
     CAColorMatrix cm;
     memcpy(&cm, matrix.m, sizeof(cm));
@@ -331,30 +319,177 @@ id I18MakeMatrixFilter(I18FXMatrix matrix) {
     } @catch (__unused NSException *exception) {
         return nil;
     }
+    objc_setAssociatedObject(filter, kOurFilterKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return filter;
 }
 
-void I18SetMatrixFilter(CALayer *layer, const I18FXMatrix *matrix) {
-    if (!layer) return;
-    NSArray *current = I18ValueForKey(layer, @"filters");
-    id previous = objc_getAssociatedObject(layer, kDesiredFilterKey);
-    if (!matrix && !previous && current.count == 0) return;
+static BOOL I18IsOurFilter(id filter) {
+    if (!filter) return NO;
+    if (objc_getAssociatedObject(filter, kOurFilterKey)) return YES;
+    // Core Animation may hand back copies of the filter objects.
+    SEL nameSel = @selector(name);
+    if (![filter respondsToSelector:nameSel]) return NO;
+    id name = ((id (*)(id, SEL))objc_msgSend)(filter, nameSel);
+    return [name isKindOfClass:[NSString class]] && [name isEqualToString:kFilterName];
+}
 
-    id filter = matrix ? I18MakeMatrixFilter(*matrix) : nil;
+void I18TintBadgeColor(float rgb[3]) {
+    float tint[3];
+    [[I18Settings shared] tintRGB:tint];
+    float h, s, v;
+    I18FXRGBToHSV(tint, &h, &s, &v);
+    I18FXHSVToRGB(h, MIN(s, 0.85f), MAX(v, 0.82f), rgb);
+}
+
+I18FXMatrix I18MatrixForTintKind(I18TintKind kind) {
+    float rgb[3];
+    [[I18Settings shared] tintRGB:rgb];
+    switch (kind) {
+        case I18TintWidget:
+            return I18FXWidgetTintMatrix(rgb, false);
+        case I18TintBadge: {
+            float badge[3];
+            I18TintBadgeColor(badge);
+            return I18FXBadgeTintMatrix(badge);
+        }
+        default:
+            return I18FXIconTintMatrix(rgb);
+    }
+}
+
+static I18TintKind I18TintKindOf(CALayer *layer) {
+    NSNumber *kind = objc_getAssociatedObject(layer, kTintKindKey);
+    return kind ? (I18TintKind)kind.integerValue : I18TintNone;
+}
+
+static void I18CallSetFilters(CALayer *layer, NSArray *filters) {
+    gFilterPassthrough = YES;
+    @try {
+        if (oL_setFilters) ((void (*)(id, SEL, NSArray *))oL_setFilters)(layer, NSSelectorFromString(@"setFilters:"), filters);
+        else [layer setValue:filters forKey:@"filters"];
+    } @catch (__unused NSException *exception) {
+    }
+    gFilterPassthrough = NO;
+}
+
+/// Puts the filter for `kind` (or none) at the end of the layer's filters,
+/// keeping whatever SpringBoard has there itself.
+static void I18InstallTintFilter(CALayer *layer, I18TintKind kind) {
+    NSArray *current = I18ValueForKey(layer, @"filters");
+    BOOL tinted = kind != I18TintNone && I18CurrentLook() == I18LookTinted;
+    id filter = tinted ? I18MakeMatrixFilter(I18MatrixForTintKind(kind)) : nil;
     objc_setAssociatedObject(layer, kDesiredFilterKey, filter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(layer, kTintGenerationKey, @(gTintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     NSMutableArray *filters = [NSMutableArray array];
+    BOOL hadOurs = NO;
     for (id existing in current) {
-        if (!I18IsOurFilter(existing)) [filters addObject:existing];
+        if (I18IsOurFilter(existing)) hadOurs = YES;
+        else [filters addObject:existing];
     }
+    if (!filter && !hadOurs) return;
     if (filter) [filters addObject:filter];
-    if (!filter && filters.count == current.count) return; // nothing of ours was there
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    @try {
-        [layer setValue:(filters.count ? filters : nil) forKey:@"filters"];
-    } @catch (__unused NSException *exception) {
+    I18CallSetFilters(layer, filters.count ? filters : nil);
+    [CATransaction commit];
+}
+
+void I18SetTintFilter(CALayer *layer, I18TintKind kind) {
+    if (!layer) return;
+    if (kind == I18TintNone) {
+        if (!objc_getAssociatedObject(layer, kTintKindKey) && !objc_getAssociatedObject(layer, kDesiredFilterKey)) {
+            // Never tinted by us: only clean up a filter copied onto it.
+            NSArray *current = I18ValueForKey(layer, @"filters");
+            BOOL ours = NO;
+            for (id existing in current) ours = ours || I18IsOurFilter(existing);
+            if (!ours) return;
+        }
+        objc_setAssociatedObject(layer, kTintKindKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [gTintedLayers removeObject:layer];
+    } else {
+        objc_setAssociatedObject(layer, kTintKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!gTintedLayers) gTintedLayers = [NSHashTable weakObjectsHashTable];
+        [gTintedLayers addObject:layer];
+    }
+    I18InstallTintFilter(layer, kind);
+}
+
+static void I18VerifyTintFilter(CALayer *layer) {
+    I18TintKind kind = I18TintKindOf(layer);
+    id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);
+    if (kind == I18TintNone && !desired) return;
+    NSNumber *generation = objc_getAssociatedObject(layer, kTintGenerationKey);
+    BOOL stale = generation.unsignedIntegerValue != gTintGeneration;
+    BOOL present = !desired;
+    if (desired) {
+        for (id filter in I18ValueForKey(layer, @"filters")) {
+            if (filter == desired) present = YES;
+        }
+    }
+    if (stale || !present) I18InstallTintFilter(layer, kind);
+}
+
+void I18RefreshTintFilters(void) {
+    gTintGeneration++;
+    NSArray<CALayer *> *layers = gTintedLayers.allObjects;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (CALayer *layer in layers) {
+        I18InstallTintFilter(layer, I18TintKindOf(layer));
     }
     [CATransaction commit];
+}
+
+/// Every -setFilters: in SpringBoard passes here. SpringBoard replaces the
+/// filters of icon layers now and then (screen on / off, pressed state) and
+/// copies them onto other layers for its animations. Our tint is always put
+/// back at the end of the list in the current colour, and a copy of it that
+/// lands on another layer is brought up to date too.
+static void hL_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
+    if (gFilterPassthrough) {
+        ((void (*)(id, SEL, NSArray *))oL_setFilters)(self, _cmd, filters);
+        return;
+    }
+    id desired = objc_getAssociatedObject(self, kDesiredFilterKey);
+    I18TintKind kind = I18TintKindOf(self);
+    BOOL hasOurs = NO;
+    for (id filter in filters) {
+        if (I18IsOurFilter(filter)) {
+            hasOurs = YES;
+            break;
+        }
+    }
+    if (!desired && kind == I18TintNone && !hasOurs) {
+        ((void (*)(id, SEL, NSArray *))oL_setFilters)(self, _cmd, filters);
+        return;
+    }
+
+    NSMutableArray *list = [NSMutableArray array];
+    for (id filter in filters) {
+        if (!I18IsOurFilter(filter)) [list addObject:filter];
+    }
+    if (kind == I18TintNone && hasOurs && I18CurrentLook() == I18LookTinted) {
+        // A copy for an animation: give it the current icon colour.
+        kind = I18TintIcon;
+        objc_setAssociatedObject(self, kTintKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!gTintedLayers) gTintedLayers = [NSHashTable weakObjectsHashTable];
+        [gTintedLayers addObject:self];
+        desired = nil;
+    }
+    if (kind != I18TintNone && I18CurrentLook() == I18LookTinted) {
+        NSNumber *generation = objc_getAssociatedObject(self, kTintGenerationKey);
+        if (!desired || generation.unsignedIntegerValue != gTintGeneration) {
+            desired = I18MakeMatrixFilter(I18MatrixForTintKind(kind));
+            objc_setAssociatedObject(self, kDesiredFilterKey, desired, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, kTintGenerationKey, @(gTintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (desired) [list addObject:desired];
+    }
+    ((void (*)(id, SEL, NSArray *))oL_setFilters)(self, _cmd, list.count ? list : nil);
+}
+
+void I18InstallFilterHooks(void) {
+    I18HookMethod([CALayer class], NSSelectorFromString(@"setFilters:"), (IMP)hL_setFilters, &oL_setFilters);
 }

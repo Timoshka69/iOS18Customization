@@ -57,6 +57,8 @@ extern NSString *const I18SettingsDidChangeNotification;
 - (void)setColorFromPickedColor:(UIColor *)color;
 /// Light / dark as reported by a view inside SpringBoard's own scene.
 - (void)noteSystemStyle:(UIUserInterfaceStyle)style;
+/// Reads the values again (another process changed them).
+- (void)reload;
 @end
 
 #pragma mark - Hooking helpers (I18Runtime.m)
@@ -94,9 +96,24 @@ void I18VerifyLayerTree(CALayer *root);
 I18Look I18CurrentLook(void);
 void I18SetCurrentLook(I18Look look);
 
+/// What a tinted layer is: decides which colour matrix it gets.
+typedef NS_ENUM(NSInteger, I18TintKind) {
+    I18TintNone = 0,
+    I18TintIcon = 1,
+    I18TintWidget = 2,
+    I18TintBadge = 3,
+};
+
 /// Builds the colour matrix filter used for tinted icons, widgets, badges.
 id _Nullable I18MakeMatrixFilter(I18FXMatrix matrix);
-void I18SetMatrixFilter(CALayer *layer, const I18FXMatrix * _Nullable matrix);
+I18FXMatrix I18MatrixForTintKind(I18TintKind kind);
+void I18TintBadgeColor(float rgb[_Nonnull 3]);
+/// Gives a layer the tint of `kind` (only shown while the look is Tinted).
+/// Every such layer is remembered, so a colour change reaches all of them.
+void I18SetTintFilter(CALayer *layer, I18TintKind kind);
+/// The colour changed: every tinted layer gets the new matrix.
+void I18RefreshTintFilters(void);
+void I18InstallFilterHooks(void);
 
 #pragma mark - Home screen (I18HomeScreen.m)
 
@@ -109,10 +126,22 @@ void I18SetHomeScreenContentHidden(BOOL hidden, BOOL animated);
 void I18EndHomeScreenEditing(void);
 /// Finds and restyles every icon on screen (after lock / unlock, style changes).
 void I18SweepHomeScreen(void);
+/// Sweep once the user stops changing things (sliders, eyedropper).
+void I18ScheduleSweep(NSTimeInterval delay);
 
 #pragma mark - Edit button (I18EditButton.m)
 
 void I18SyncEditButton(UIView *rootFolderView);
+void I18InstallEditButtonHooks(void);
+/// Edit mode just started: look for the "+" a few times while it animates in.
+void I18EditModeChanged(UIView *rootFolderView, BOOL editing);
+
+#pragma mark - Settings app (I18SettingsApp.m)
+
+void I18InstallSettingsAppHooks(void);
+/// Darwin notification posted by SpringBoard whenever the look changes.
+#define I18_CHANGED_NOTIFICATION "com.timoshka69.ios18customization/changed"
+void I18PostChangedNotification(void);
 
 #pragma mark - Wallpaper dim (I18Wallpaper.m)
 

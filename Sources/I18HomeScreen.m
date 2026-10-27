@@ -39,12 +39,21 @@ static NSString *const kOriginalFillKey = @"i18OriginalFill";
 
 #pragma mark - Geometry record
 
-/// What SpringBoard asked for, before the large-icon scale is applied.
+/// What SpringBoard asked for, before the large-icon scale is applied, and
+/// what was really set.
+///
+/// App icons are made larger through their bounds, not a transform: the
+/// layer then really is that big, so the launch / close zoom, snapshots and
+/// portals of the icon show all of it (with a transform they were cut off).
+/// Folder and clock icons keep the transform (see I18GeometryOf).
 @interface I18Geometry : NSObject
 @property (nonatomic) CGSize size;
 @property (nonatomic) CGPoint center;
 @property (nonatomic) CGAffineTransform transform;
+@property (nonatomic) CGSize outSize;
+@property (nonatomic) CGPoint outCenter;
 @property (nonatomic) BOOL valid;
+@property (nonatomic) BOOL transformMode;
 @property (nonatomic) CGFloat applied;
 @end
 
@@ -62,6 +71,12 @@ static I18Geometry *I18GeometryOf(UIView *view) {
     I18Geometry *geometry = objc_getAssociatedObject(view, kGeometryKey);
     if (!geometry) {
         geometry = [[I18Geometry alloc] init];
+        // Only the plain app icon image view is resized through its bounds.
+        // Folders (mini grid), the clock (hands) and other special icons
+        // lay out their parts for one size, they keep the transform.
+        NSString *name = NSStringFromClass(object_getClass(view));
+        if ([name hasPrefix:@"NSKVONotifying_"]) name = [name substringFromIndex:15];
+        geometry.transformMode = ![name isEqualToString:@"SBIconImageView"];
         objc_setAssociatedObject(view, kGeometryKey, geometry, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     return geometry;
@@ -130,18 +145,30 @@ static BOOL I18IsChrome(UIView *view) {
     return I18IsLabel(view) || I18IsBadge(view) || I18IsCloseBox(view);
 }
 
+/// Large size applies to icons and widgets that live on the home screen
+/// pages and in the dock - like iOS 18. Copies of an icon that SpringBoard
+/// makes for its animations (app launch / close, drag) live elsewhere and
+/// stay as they are, so they match the frame SpringBoard animates them in.
 static BOOL I18ComputeLargeEligible(UIView *iconView) {
-    if (I18IsWidgetIconView(iconView)) return NO;
-    id location = I18Call(iconView, @"location") ?: I18Call(iconView, @"iconLocation");
-    if ([location isKindOfClass:[NSString class]]) {
-        NSString *name = location;
-        if ([name hasPrefix:@"SBIconLocationRoot"]) return YES;
-        if ([name rangeOfString:@"Dock"].location != NSNotFound) return YES;
-        return NO;
-    }
-    for (UIView *view = iconView.superview; view; view = view.superview) {
-        if (I18ClassNameContains(view, @"RootIconListView") || I18ClassNameContains(view, @"DockIconListView")) return YES;
-        if (I18ClassNameContains(view, @"Library")) return NO;
+    BOOL widget = I18IsWidgetIconView(iconView);
+    int depth = 0;
+    for (UIView *view = iconView.superview; view && depth < 12; view = view.superview, depth++) {
+        if (I18ClassNameContains(view, @"Library") || I18ClassNameContains(view, @"Switcher") ||
+            I18ClassNameContains(view, @"Floating") || I18ClassNameContains(view, @"Gallery") ||
+            I18ClassNameContains(view, @"Today")) {
+            return NO;
+        }
+        if (I18ClassNameContains(view, @"RootIconListView")) return YES;
+        if (I18ClassNameContains(view, @"DockIconListView")) return !widget;
+        if (I18ClassNameContains(view, @"IconListView")) {
+            // Plain list views: a page of the home screen on some builds,
+            // a folder or the Today view on others - the location decides.
+            id location = I18Call(iconView, @"location") ?: I18Call(iconView, @"iconLocation");
+            if (![location isKindOfClass:[NSString class]]) return NO;
+            NSString *name = location;
+            if ([name hasPrefix:@"SBIconLocationRoot"]) return YES;
+            return !widget && [name rangeOfString:@"Dock"].location != NSNotFound;
+        }
     }
     return NO;
 }
@@ -209,6 +236,7 @@ static CGFloat I18TargetScale(UIView *imageView) {
 
 static IMP oIV_setFrame, oIV_setBounds, oIV_setCenter, oIV_setTransform;
 static BOOL gGeometryPassthrough;
+static CGFloat gTypicalIconWidth = 60.0;
 
 static void I18CallSetBounds(UIView *view, CGRect bounds) {
     if (oIV_setBounds) ((void (*)(id, SEL, CGRect))oIV_setBounds)(view, @selector(setBounds:), bounds);
@@ -225,12 +253,26 @@ static void I18CallSetTransform(UIView *view, CGAffineTransform transform) {
     else view.transform = transform;
 }
 
+static BOOL I18SizeClose(CGSize a, CGSize b) {
+    return fabs(a.width - b.width) < 0.3 && fabs(a.height - b.height) < 0.3;
+}
+
+static BOOL I18PointClose(CGPoint a, CGPoint b) {
+    return fabs(a.x - b.x) < 0.3 && fabs(a.y - b.y) < 0.3;
+}
+
+/// Size of the frame the icon has on screen right now.
+static CGSize I18ShownSize(I18Geometry *geometry) {
+    if (geometry.transformMode) return CGSizeMake(geometry.size.width * geometry.applied, geometry.size.height * geometry.applied);
+    return geometry.outSize;
+}
+
 static void I18ApplyGeometry(UIView *view, I18Geometry *geometry, CGFloat scale) {
     if (!geometry.valid) return;
     gGeometryPassthrough = YES;
 
     CGRect bounds = view.bounds;
-    bounds.size = geometry.size;
+    bounds.size = geometry.transformMode ? geometry.size : CGSizeMake(geometry.size.width * scale, geometry.size.height * scale);
     I18CallSetBounds(view, bounds);
 
     // Grow downwards into the (now hidden) label area, top edge stays put.
@@ -238,14 +280,21 @@ static void I18ApplyGeometry(UIView *view, I18Geometry *geometry, CGFloat scale)
     center.y += geometry.size.height * (scale - 1.0) * 0.5;
     I18CallSetCenter(view, center);
 
-    CGAffineTransform transform = geometry.transform;
-    if (fabs(scale - 1.0) > 0.001) {
-        transform = CGAffineTransformConcat(CGAffineTransformMakeScale(scale, scale), geometry.transform);
+    if (geometry.transformMode) {
+        CGAffineTransform transform = geometry.transform;
+        if (fabs(scale - 1.0) > 0.001) {
+            transform = CGAffineTransformConcat(CGAffineTransformMakeScale(scale, scale), geometry.transform);
+        }
+        I18CallSetTransform(view, transform);
     }
-    I18CallSetTransform(view, transform);
 
     gGeometryPassthrough = NO;
     geometry.applied = scale;
+    geometry.outSize = view.bounds.size;
+    geometry.outCenter = view.center;
+    if (scale <= 1.001 && geometry.size.width > 30.0 && geometry.size.width < 100.0 && !geometry.transformMode) {
+        gTypicalIconWidth = geometry.size.width;
+    }
 
     CALayer *layer = view.layer;
     if (scale > 1.001) {
@@ -268,6 +317,8 @@ static void I18EnsureGeometryBase(UIView *view, I18Geometry *geometry) {
     geometry.size = view.bounds.size;
     geometry.center = view.center;
     geometry.transform = view.transform;
+    geometry.outSize = geometry.size;
+    geometry.outCenter = geometry.center;
     geometry.valid = YES;
     geometry.applied = 1.0;
 }
@@ -280,11 +331,6 @@ static void I18UpdateGeometry(UIView *imageView, BOOL force) {
     I18ApplyGeometry(imageView, geometry, scale);
 }
 
-static BOOL I18RectsClose(CGRect a, CGRect b) {
-    return fabs(a.origin.x - b.origin.x) < 0.25 && fabs(a.origin.y - b.origin.y) < 0.25 &&
-           fabs(a.size.width - b.size.width) < 0.25 && fabs(a.size.height - b.size.height) < 0.25;
-}
-
 static void hIV_setFrame(UIView *self, SEL _cmd, CGRect frame) {
     I18Geometry *geometry = objc_getAssociatedObject(self, kGeometryKey);
     if (gGeometryPassthrough || !oIV_setBounds || !oIV_setCenter || !oIV_setTransform) {
@@ -292,57 +338,75 @@ static void hIV_setFrame(UIView *self, SEL _cmd, CGRect frame) {
         return;
     }
     CGFloat scale = I18TargetScale(self);
-    BOOL scaled = geometry && geometry.applied > 1.001;
+    BOOL scaled = geometry && geometry.valid && geometry.applied > 1.001;
     if (!scaled && scale <= 1.001) {
         ((void (*)(id, SEL, CGRect))oIV_setFrame)(self, _cmd, frame);
         if (geometry) {
             geometry.size = self.bounds.size;
             geometry.center = self.center;
+            geometry.outSize = geometry.size;
+            geometry.outCenter = geometry.center;
             geometry.valid = YES;
         }
         return;
     }
-    // Someone re-assigning the frame they just read back: nothing changes.
-    if (scaled && I18RectsClose(frame, self.frame)) return;
 
     geometry = I18GeometryOf(self);
     if (!geometry.valid) geometry.transform = self.transform;
-    geometry.size = frame.size;
-    geometry.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+    CGPoint middle = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+    if (scaled && I18SizeClose(frame.size, I18ShownSize(geometry))) {
+        // The large frame was read back (and maybe moved): keep the size
+        // SpringBoard asked for, only follow the move.
+        if (I18PointClose(middle, geometry.outCenter)) return;
+        geometry.center = CGPointMake(middle.x - (geometry.outCenter.x - geometry.center.x),
+                                      middle.y - (geometry.outCenter.y - geometry.center.y));
+    } else {
+        geometry.size = frame.size;
+        geometry.center = middle;
+    }
     geometry.valid = YES;
     I18ApplyGeometry(self, geometry, scale);
 }
 
 static void hIV_setBounds(UIView *self, SEL _cmd, CGRect bounds) {
     I18Geometry *geometry = objc_getAssociatedObject(self, kGeometryKey);
-    if (gGeometryPassthrough || !geometry || !geometry.valid) {
+    if (gGeometryPassthrough || !geometry || !geometry.valid || geometry.applied <= 1.001) {
         ((void (*)(id, SEL, CGRect))oIV_setBounds)(self, _cmd, bounds);
-        if (!gGeometryPassthrough && geometry) geometry.size = bounds.size;
+        if (!gGeometryPassthrough && geometry) {
+            geometry.size = bounds.size;
+            geometry.outSize = bounds.size;
+        }
         return;
     }
-    BOOL sizeChanged = !CGSizeEqualToSize(geometry.size, bounds.size);
+    if (!geometry.transformMode && I18SizeClose(bounds.size, geometry.outSize)) {
+        ((void (*)(id, SEL, CGRect))oIV_setBounds)(self, _cmd, bounds); // read back
+        return;
+    }
+    BOOL sizeChanged = !I18SizeClose(geometry.size, bounds.size);
     geometry.size = bounds.size;
-    ((void (*)(id, SEL, CGRect))oIV_setBounds)(self, _cmd, bounds);
+    if (geometry.transformMode) ((void (*)(id, SEL, CGRect))oIV_setBounds)(self, _cmd, bounds);
     // The large-icon offset depends on the height, keep it in sync.
-    if (sizeChanged && geometry.applied > 1.001) I18ApplyGeometry(self, geometry, geometry.applied);
+    if (sizeChanged || !geometry.transformMode) I18ApplyGeometry(self, geometry, geometry.applied);
 }
 
 static void hIV_setCenter(UIView *self, SEL _cmd, CGPoint center) {
     I18Geometry *geometry = objc_getAssociatedObject(self, kGeometryKey);
     if (gGeometryPassthrough || !geometry || !geometry.valid || geometry.applied <= 1.001) {
         ((void (*)(id, SEL, CGPoint))oIV_setCenter)(self, _cmd, center);
-        if (!gGeometryPassthrough && geometry) geometry.center = center;
+        if (!gGeometryPassthrough && geometry) {
+            geometry.center = center;
+            geometry.outCenter = center;
+        }
         return;
     }
-    CGPoint current = self.center;
-    if (fabs(current.x - center.x) < 0.25 && fabs(current.y - center.y) < 0.25) return;
+    if (I18PointClose(center, geometry.outCenter) || I18PointClose(center, self.center)) return;
     geometry.center = center;
     I18ApplyGeometry(self, geometry, geometry.applied);
 }
 
 static void hIV_setTransform(UIView *self, SEL _cmd, CGAffineTransform transform) {
     I18Geometry *geometry = objc_getAssociatedObject(self, kGeometryKey);
-    if (gGeometryPassthrough || !geometry || !geometry.valid || geometry.applied <= 1.001) {
+    if (gGeometryPassthrough || !geometry || !geometry.valid || !geometry.transformMode || geometry.applied <= 1.001) {
         ((void (*)(id, SEL, CGAffineTransform))oIV_setTransform)(self, _cmd, transform);
         if (!gGeometryPassthrough && geometry) geometry.transform = transform;
         return;
@@ -350,6 +414,64 @@ static void hIV_setTransform(UIView *self, SEL _cmd, CGAffineTransform transform
     if (CGAffineTransformEqualToTransform(transform, self.transform)) return;
     geometry.transform = transform;
     I18ApplyGeometry(self, geometry, geometry.applied);
+}
+
+/// Animations and badges ask the icon view where its image is. For a large
+/// icon that is the large frame (same top edge and middle, bigger size).
+static IMP oV_iconImageFrame;
+
+static CGRect hV_iconImageFrame(UIView *self, SEL _cmd) {
+    CGRect frame = ((CGRect (*)(id, SEL))oV_iconImageFrame)(self, _cmd);
+    UIView *imageView = I18ImageViewOf(self);
+    I18Geometry *geometry = imageView ? objc_getAssociatedObject(imageView, kGeometryKey) : nil;
+    if (!geometry.valid || geometry.applied <= 1.001) return frame;
+    if (!I18SizeClose(frame.size, geometry.size)) return frame; // already the large one
+    CGFloat scale = geometry.applied;
+    return CGRectMake(frame.origin.x - frame.size.width * (scale - 1.0) * 0.5, frame.origin.y,
+                      frame.size.width * scale, frame.size.height * scale);
+}
+
+#pragma mark - Large widgets
+
+static const void *kWidgetScaleKey = &kWidgetScaleKey;
+
+/// iOS 18 makes widgets a little bigger too, so their edges stay in line
+/// with the large icons around them. The widget's layers are scaled as a
+/// whole (its content is drawn by another process and must not re-layout).
+static void I18ApplyWidgetScale(UIView *iconView, BOOL large, BOOL animated) {
+    CALayer *layer = iconView.layer;
+    CGSize size = iconView.bounds.size;
+    CGFloat scale = 1.0;
+    if (large && size.width > 40.0) {
+        scale = 1.0 + gTypicalIconWidth * (kLargeIconScale - 1.0) / size.width;
+        scale = MIN(MAX(scale, 1.0), 1.12);
+    }
+    NSNumber *applied = objc_getAssociatedObject(iconView, kWidgetScaleKey);
+    if (!applied && scale <= 1.001) return;
+
+    CATransform3D target = CATransform3DIdentity;
+    if (scale > 1.001) {
+        // Scaled around the middle, then moved down so the top edge stays.
+        CGFloat dy = size.height * (scale - 1.0) * 0.5;
+        target = CATransform3DConcat(CATransform3DMakeScale(scale, scale, 1.0), CATransform3DMakeTranslation(0.0, dy, 0.0));
+    }
+    if (CATransform3DEqualToTransform(layer.sublayerTransform, target)) return;
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (animated && iconView.window) {
+        CASpringAnimation *spring = [CASpringAnimation animationWithKeyPath:@"sublayerTransform"];
+        spring.damping = 26.0;
+        spring.stiffness = 260.0;
+        spring.mass = 1.0;
+        spring.fromValue = [NSValue valueWithCATransform3D:(layer.presentationLayer ?: layer).sublayerTransform];
+        spring.toValue = [NSValue valueWithCATransform3D:target];
+        spring.duration = spring.settlingDuration;
+        [layer addAnimation:spring forKey:@"i18.widgetScale"];
+    }
+    layer.sublayerTransform = target;
+    [CATransaction commit];
+    objc_setAssociatedObject(iconView, kWidgetScaleKey, scale > 1.001 ? @(scale) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 #pragma mark - Large icons: label, badge, delete button
@@ -518,15 +640,6 @@ static void I18ForceWidgetAppearance(UIView *part, BOOL dark) {
     I18ForceWidgetAppearanceIn(part, dark, 0);
 }
 
-static void I18TintBadgeColor(float rgb[3]) {
-    I18Settings *settings = [I18Settings shared];
-    float tint[3];
-    [settings tintRGB:tint];
-    float h, s, v;
-    I18FXRGBToHSV(tint, &h, &s, &v);
-    I18FXHSVToRGB(h, MIN(s, 0.85f), MAX(v, 0.82f), rgb);
-}
-
 static void I18StyleImageView(UIView *imageView) {
     if (!imageView) return;
     // The token lives on the image view itself: SpringBoard recycles image
@@ -536,16 +649,10 @@ static void I18StyleImageView(UIView *imageView) {
     BOOL clock = I18ClassNameContains(imageView, @"Clock");
 
     I18AdoptLayerTree(imageView.layer, clock);
+    I18SetTintFilter(imageView.layer, look == I18LookTinted ? I18TintIcon : I18TintNone);
+    // After the filter: the check also refreshes the tint of layers below
+    // (an old image view SpringBoard keeps inside a cross-fade).
     I18VerifyLayerTree(imageView.layer);
-
-    if (look == I18LookTinted) {
-        float rgb[3];
-        [[I18Settings shared] tintRGB:rgb];
-        I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
-        I18SetMatrixFilter(imageView.layer, &matrix);
-    } else {
-        I18SetMatrixFilter(imageView.layer, NULL);
-    }
 
     if (clock) {
         CGSize size = imageView.layer.bounds.size;
@@ -562,30 +669,26 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
     I18Look look = I18CurrentLook();
     BOOL tinted = look == I18LookTinted;
     BOOL widget = I18IsWidgetIconView(iconView);
-    BOOL large = settings.largeIcons && !widget && I18IsLargeEligible(iconView);
+    // Large size hides the labels of icons and widgets alike (iOS 18).
+    BOOL large = settings.largeIcons && I18IsLargeEligible(iconView);
 
-    float rgb[3];
-    [settings tintRGB:rgb];
-    float badgeRGB[3];
-    I18TintBadgeColor(badgeRGB);
-    I18FXMatrix badgeMatrix = I18FXBadgeTintMatrix(badgeRGB);
     // Widgets are switched to their dark appearance in the dark looks (like
     // iOS 18) and tinted by brightness, never inverted: inverting turned
     // photos into negatives and flipped night-time weather widgets.
-    I18FXMatrix widgetMatrix = I18FXWidgetTintMatrix(rgb, false);
     BOOL homeWidget = widget && I18IsHomeLocation(iconView);
     BOOL darkWidget = homeWidget && look != I18LookStock;
+    if (widget) I18ApplyWidgetScale(iconView, large && homeWidget, animated);
 
     for (UIView *part in I18IconViewParts(iconView, imageView)) {
         if (I18IsLabel(part)) {
             I18SetLabelHidden(part, large, animated);
         } else if (I18IsBadge(part)) {
-            I18SetMatrixFilter(part.layer, tinted ? &badgeMatrix : NULL);
+            I18SetTintFilter(part.layer, tinted ? I18TintBadge : I18TintNone);
             if (imageView) I18ShiftCornerView(part, imageView, YES);
         } else if (I18IsCloseBox(part)) {
             if (imageView) I18ShiftCornerView(part, imageView, NO);
         } else if (widget) {
-            I18SetMatrixFilter(part.layer, (tinted && homeWidget) ? &widgetMatrix : NULL);
+            I18SetTintFilter(part.layer, (tinted && homeWidget) ? I18TintWidget : I18TintNone);
             I18ForceWidgetAppearance(part, darkWidget);
         }
     }
@@ -616,7 +719,9 @@ static void I18StyleIconView(UIView *iconView, BOOL force, BOOL animated) {
 }
 
 /// Walks every window of SpringBoard's scene and styles each icon it finds,
-/// including ones that never passed through the hooks above.
+/// including ones that never passed through the hooks above. It goes all
+/// the way down: SpringBoard sometimes keeps an old image view inside the
+/// current one while it cross-fades.
 static void I18SweepView(UIView *view, int depth) {
     if (!view || depth > 40) return;
     if (gIconViewClass && [view isKindOfClass:gIconViewClass]) {
@@ -625,7 +730,6 @@ static void I18SweepView(UIView *view, int depth) {
     } else if (gIconImageViewClass && [view isKindOfClass:gIconImageViewClass]) {
         [gImageViews addObject:view];
         I18StyleImageView(view);
-        return;
     }
     for (UIView *sub in view.subviews) {
         I18SweepView(sub, depth + 1);
@@ -640,6 +744,16 @@ void I18SweepHomeScreen(void) {
         if (window.hidden || I18ClassNameContains(window, @"I18")) continue;
         I18SweepView(window, 0);
     }
+}
+
+static NSUInteger gSweepToken;
+
+void I18ScheduleSweep(NSTimeInterval delay) {
+    NSUInteger token = ++gSweepToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (token != gSweepToken) return; // something newer is pending
+        I18SweepHomeScreen();
+    });
 }
 
 #pragma mark - Public entry points
@@ -661,6 +775,8 @@ void I18ApplyLook(BOOL animated) {
     }
 
     I18ReprocessAllContents(NO);
+    // Every layer that was ever tinted, wherever it is now: tint on or off.
+    I18RefreshTintFilters();
     for (UIView *imageView in gImageViews.allObjects) {
         I18StyleImageView(imageView);
     }
@@ -669,23 +785,19 @@ void I18ApplyLook(BOOL animated) {
         I18StyleIconViewParts(iconView, I18ImageViewOf(iconView), NO);
     }
     I18SweepHomeScreen();
+    I18ScheduleSweep(0.6);
+    I18PostChangedNotification();
 }
 
 void I18ApplyTint(void) {
     if (I18CurrentLook() != I18LookTinted) return;
-    gStyleGeneration++;
-    // Called for every slider movement: only the filters are swapped here.
-    float rgb[3];
-    [[I18Settings shared] tintRGB:rgb];
-    I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
-    for (UIView *imageView in gImageViews.allObjects) {
-        I18SetMatrixFilter(imageView.layer, &matrix);
-        objc_setAssociatedObject(imageView, kImageGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    for (UIView *iconView in gIconViews.allObjects) {
-        objc_setAssociatedObject(iconView, kStyledGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        I18StyleIconViewParts(iconView, I18ImageViewOf(iconView), NO);
-    }
+    // Called for every slider movement: only the filters are swapped here,
+    // on every layer that carries the tint (not just the ones we can find
+    // through the icon views right now).
+    I18RefreshTintFilters();
+    I18PostChangedNotification();
+    // Once the slider rests, a full pass catches anything that was off screen.
+    I18ScheduleSweep(0.35);
 }
 
 void I18ApplyIconSize(BOOL animated) {
@@ -708,7 +820,10 @@ void I18ApplyIconSize(BOOL animated) {
           initialSpringVelocity:0.0
                         options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
                      animations:changes
-                     completion:nil];
+                     completion:^(__unused BOOL finished) {
+        // Icon views that were laid out again during the animation.
+        I18ScheduleSweep(0.1);
+    }];
 }
 
 UIWindow *I18HomeScreenWindow(void) {
@@ -830,6 +945,21 @@ static void hV_didMoveToWindow(UIView *self, SEL _cmd) {
     if (I18IsLargeEligible(self)) I18InstallSceneHelpers(window);
 }
 
+static IMP oV_didMoveToSuperview;
+
+/// An icon view moved between a page and somewhere else (drag, folder):
+/// large size follows where it is now.
+static void hV_didMoveToSuperview(UIView *self, SEL _cmd) {
+    ((void (*)(id, SEL))oV_didMoveToSuperview)(self, _cmd);
+    if (!self.window || !self.superview) return;
+    BOOL before = I18IsLargeEligible(self);
+    I18RefreshEligibility(self);
+    if (before == I18IsLargeEligible(self)) return;
+    UIView *imageView = I18ImageViewOf(self);
+    if (imageView) I18UpdateGeometry(imageView, NO);
+    I18StyleIconViewParts(self, imageView, NO);
+}
+
 #pragma mark - Hooks: SBRootFolderView
 
 static IMP oRF_layoutSubviews, oRF_setEditingAnimated;
@@ -841,7 +971,7 @@ static void hRF_layoutSubviews(UIView *self, SEL _cmd) {
 
 static void hRF_setEditingAnimated(UIView *self, SEL _cmd, BOOL editing, BOOL animated) {
     ((void (*)(id, SEL, BOOL, BOOL))oRF_setEditingAnimated)(self, _cmd, editing, animated);
-    I18SyncEditButton(self);
+    I18EditModeChanged(self, editing);
 }
 
 #pragma mark - Install
@@ -852,6 +982,8 @@ void I18InstallHomeScreenHooks(void) {
     gIconViewClass = objc_getClass("SBIconView");
     gIconImageViewClass = objc_getClass("SBIconImageView");
     I18SetCurrentLook([I18Settings shared].look);
+    I18InstallFilterHooks();
+    I18InstallEditButtonHooks();
 
     Class imageView = gIconImageViewClass;
     I18HookMethod(imageView, @selector(didMoveToWindow), (IMP)hIV_didMoveToWindow, &oIV_didMoveToWindow);
@@ -870,6 +1002,18 @@ void I18InstallHomeScreenHooks(void) {
 
     I18HookMethod(gIconViewClass, @selector(layoutSubviews), (IMP)hV_layoutSubviews, &oV_layoutSubviews);
     I18HookMethod(gIconViewClass, @selector(didMoveToWindow), (IMP)hV_didMoveToWindow, &oV_didMoveToWindow);
+    I18HookMethod(gIconViewClass, @selector(didMoveToSuperview), (IMP)hV_didMoveToSuperview, &oV_didMoveToSuperview);
+
+    // Only hooked when it really is "- (CGRect)iconImageFrame".
+    SEL frameSel = NSSelectorFromString(@"iconImageFrame");
+    Method frameMethod = gIconViewClass ? class_getInstanceMethod(gIconViewClass, frameSel) : NULL;
+    if (frameMethod) {
+        char returnType[64] = {0};
+        method_getReturnType(frameMethod, returnType, sizeof(returnType));
+        if (method_getNumberOfArguments(frameMethod) == 2 && strncmp(returnType, "{CGRect=", 8) == 0) {
+            I18HookMethod(gIconViewClass, frameSel, (IMP)hV_iconImageFrame, &oV_iconImageFrame);
+        }
+    }
 
     Class rootFolderView = objc_getClass("SBRootFolderView");
     I18HookMethod(rootFolderView, @selector(layoutSubviews), (IMP)hRF_layoutSubviews, &oRF_layoutSubviews);

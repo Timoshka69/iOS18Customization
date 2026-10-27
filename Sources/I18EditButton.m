@@ -72,16 +72,24 @@ static BOOL I18FireStockAction(UIView *view, int depth) {
     return NO;
 }
 
+static BOOL gFiringStock;
+
 static void I18AddWidget(UIView *stock) {
-    if (I18FireStockAction(stock, 0)) return;
-    // The action may live on a container of the "+" view.
-    UIView *parent = stock.superview;
-    for (int level = 0; parent && level < 2; level++, parent = parent.superview) {
-        if (I18FireGestures(parent)) return;
-        if ([parent isKindOfClass:[UIControl class]]) {
-            [(UIControl *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
-            return;
+    gFiringStock = YES;
+    @try {
+        if (!I18FireStockAction(stock, 0)) {
+            // The action may live on a container of the "+" view.
+            UIView *parent = stock.superview;
+            for (int level = 0; parent && level < 2; level++, parent = parent.superview) {
+                if (I18FireGestures(parent)) break;
+                if ([parent isKindOfClass:[UIControl class]]) {
+                    [(UIControl *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
+                    break;
+                }
+            }
         }
+    } @finally {
+        gFiringStock = NO;
     }
 }
 
@@ -94,6 +102,7 @@ static void I18AddWidget(UIView *stock) {
 + (instancetype)shared;
 - (void)showBelowView:(UIView *)anchor;
 - (void)dismiss;
+- (void)dismissAnimated:(BOOL)animated;
 @end
 
 @interface I18PlusMenuWindow : UIWindow
@@ -170,6 +179,7 @@ static void I18AddWidget(UIView *stock) {
     I18PlusMenuWindow *_window;
     UIView *_card;
     __weak UIView *_anchor;
+    CFTimeInterval _shownAt;
 }
 
 + (instancetype)shared {
@@ -185,6 +195,10 @@ static void I18AddWidget(UIView *stock) {
     UIWindow *home = anchor.window;
     UIWindowScene *scene = home.windowScene;
     if (!home || !scene) return;
+    // One tap can reach us twice (touch down and touch up of the stock control).
+    CFTimeInterval now = CACurrentMediaTime();
+    if (_window && now - _shownAt < 0.6) return;
+    _shownAt = now;
     if (_window) [self dismissAnimated:NO];
     _anchor = anchor;
 
@@ -469,6 +483,64 @@ static void I18AttachMenu(UIView *host) {
 }
 
 #pragma mark - Entry point
+
+static BOOL I18IsTopLeftOfScreen(UIView *view) {
+    UIWindow *window = view.window;
+    if (!window || I18ClassNameContains(window, @"I18")) return NO;
+    CGRect frame = [view convertRect:view.bounds toView:window];
+    return CGRectGetMinY(frame) < 120.0 && CGRectGetMaxX(frame) < window.bounds.size.width * 0.5;
+}
+
+/// The "+" of jiggle mode, recognised when it fires its action.
+static BOOL I18IsStockPlus(UIControl *control, SEL action) {
+    if (I18IsOurs(control) || [control isKindOfClass:[I18PlusMenuRow class]]) return NO;
+    BOOL named = I18HasWidgetButtonName(control) || I18HasWidgetButtonName(control.superview);
+    BOOL widgetAction = action && [NSStringFromSelector(action) rangeOfString:@"idget"].location != NSNotFound;
+    if (!named && !widgetAction) return NO;
+    // The widget gallery has an "Add Widget" button too, at the bottom.
+    return I18IsTopLeftOfScreen(control);
+}
+
+static IMP oC_sendAction;
+
+/// Safety net for the very first tap: if the stock "+" fires before our tap
+/// area is on top of it, the menu is shown instead of the widget gallery.
+static void hC_sendAction(UIControl *self, SEL _cmd, SEL action, id target, UIEvent *event) {
+    if (!gFiringStock && I18IsStockPlus(self, action)) {
+        UIView *anchor = self;
+        if (I18HasWidgetButtonName(self.superview) && !I18HasWidgetButtonName(self)) anchor = self.superview;
+        [[I18PlusMenu shared] showBelowView:anchor];
+        return;
+    }
+    ((void (*)(id, SEL, SEL, id, UIEvent *))oC_sendAction)(self, _cmd, action, target, event);
+}
+
+void I18InstallEditButtonHooks(void) {
+    I18HookMethod([UIControl class], @selector(sendAction:to:forEvent:), (IMP)hC_sendAction, &oC_sendAction);
+}
+
+/// Edit mode starts with an animation and the "+" is added during it, often
+/// after the last layout pass of the root folder view. Look for it a few
+/// times while it appears, so the tap area is there before the first tap.
+void I18EditModeChanged(UIView *root, BOOL editing) {
+    if (!root) return;
+    if (!editing) {
+        [[I18PlusMenu shared] dismissAnimated:YES];
+        I18SyncEditButton(root);
+        return;
+    }
+    objc_setAssociatedObject(root, kLastSearchKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    I18SyncEditButton(root);
+    __weak UIView *weakRoot = root;
+    for (NSNumber *delay in @[@0.05, @0.2, @0.45, @0.8, @1.4]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIView *strongRoot = weakRoot;
+            if (!strongRoot) return;
+            objc_setAssociatedObject(strongRoot, kLastSearchKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            I18SyncEditButton(strongRoot);
+        });
+    }
+}
 
 void I18SyncEditButton(UIView *root) {
     if (!root) return;
