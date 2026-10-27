@@ -197,10 +197,17 @@ static const NSInteger kLoupeCells = 9;
 
 #pragma mark - Panel
 
-static const CGFloat kSide = 18.0;
-static const CGFloat kTopRowY = 16.0;
-static const CGFloat kTopRowHeight = 36.0;
-static const CGFloat kSliderHeight = 34.0;
+// Metrics follow the iOS 18 customization sheet.
+static const CGFloat kCardInset = 8.0;      // gap between the sheet and the screen edges
+static const CGFloat kCardRadius = 32.0;
+static const CGFloat kSide = 16.0;          // inner padding of the sheet
+static const CGFloat kTopRowY = 12.0;
+static const CGFloat kTopRowHeight = 34.0;
+static const CGFloat kTilesGap = 14.0;
+static const CGFloat kCaptionHeight = 17.0;
+static const CGFloat kSliderHeight = 30.0;
+static const CGFloat kSliderGap = 14.0;
+static const CGFloat kBottomPadding = 20.0;
 
 @interface I18Panel () <UIGestureRecognizerDelegate>
 @end
@@ -275,11 +282,10 @@ static const CGFloat kSliderHeight = 34.0;
     _card.clipsToBounds = NO;
     [_root addSubview:_card];
 
-    _material = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
+    _material = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
     _material.clipsToBounds = YES;
-    _material.layer.cornerRadius = 34.0;
+    _material.layer.cornerRadius = kCardRadius;
     _material.layer.cornerCurve = kCACornerCurveContinuous;
-    _material.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
     [_card addSubview:_material];
 
     _cardPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(cardPanned:)];
@@ -342,46 +348,50 @@ static const CGFloat kSliderHeight = 34.0;
     return [I18Settings shared].style == I18StyleTinted;
 }
 
+- (CGFloat)tilesTop {
+    return kTopRowY + kTopRowHeight + kTilesGap;
+}
+
 - (CGFloat)contentHeightWithTint:(BOOL)tint iconSize:(CGFloat)iconSize {
-    CGFloat tilesBottom = kTopRowY + kTopRowHeight + 16.0 + 4.0 + iconSize + 8.0 + 18.0;
-    if (!tint) return tilesBottom + 24.0;
-    return tilesBottom + 20.0 + kSliderHeight + 14.0 + kSliderHeight + 24.0;
+    CGFloat tilesBottom = [self tilesTop] + iconSize + 6.0 + kCaptionHeight;
+    if (!tint) return tilesBottom + kBottomPadding;
+    return tilesBottom + 18.0 + kSliderHeight + kSliderGap + kSliderHeight + kBottomPadding;
 }
 
 - (CGFloat)iconSizeForWidth:(CGFloat)width {
     CGFloat column = (width - 2.0 * kSide) / 4.0;
-    return MIN(64.0, floor(column - 18.0));
+    return MIN(60.0, floor(column - 22.0));
 }
 
 - (void)layoutCard {
     CGRect bounds = _root.bounds;
-    CGFloat width = bounds.size.width;
-    CGFloat bottomInset = _window.safeAreaInsets.bottom;
+    CGFloat bottomInset = MAX(_window.safeAreaInsets.bottom - 8.0, 0.0);
+    CGFloat width = bounds.size.width - 2.0 * kCardInset;
     CGFloat iconSize = [self iconSizeForWidth:width];
     BOOL tint = [self showsTintControls];
 
-    _cardHeight = [self contentHeightWithTint:tint iconSize:iconSize] + bottomInset;
+    _cardHeight = [self contentHeightWithTint:tint iconSize:iconSize];
     _card.bounds = CGRectMake(0, 0, width, _cardHeight);
-    _card.center = CGPointMake(width * 0.5, bounds.size.height - _cardHeight * 0.5);
-    _material.frame = CGRectMake(0, 0, width, _cardHeight + 60.0); // runs past the bottom edge while dragging
+    _card.center = CGPointMake(bounds.size.width * 0.5, bounds.size.height - kCardInset - bottomInset - _cardHeight * 0.5);
+    _material.frame = CGRectMake(0, 0, width, _cardHeight);
 
     CGFloat rowMid = kTopRowY + kTopRowHeight * 0.5;
-    _sunButton.frame = CGRectMake(kSide - 6.0, rowMid - 20.0, 40.0, 40.0);
-    _eyedropperButton.frame = CGRectMake(width - kSide - 34.0, rowMid - 20.0, 40.0, 40.0);
-    CGFloat segmentWidth = MIN(176.0, width - 2.0 * (kSide + 56.0));
-    _sizeSegment.frame = CGRectMake(round((width - segmentWidth) * 0.5), rowMid - 16.0, segmentWidth, 32.0);
+    _sunButton.frame = CGRectMake(kSide - 8.0, rowMid - 20.0, 40.0, 40.0);
+    _eyedropperButton.frame = CGRectMake(width - kSide - 32.0, rowMid - 20.0, 40.0, 40.0);
+    CGFloat segmentWidth = MIN(132.0, width - 2.0 * (kSide + 56.0));
+    _sizeSegment.frame = CGRectMake(round((width - segmentWidth) * 0.5), rowMid - 14.0, segmentWidth, 28.0);
 
     CGFloat column = (width - 2.0 * kSide) / _tiles.count;
-    CGFloat tilesY = kTopRowY + kTopRowHeight + 16.0;
+    CGFloat tilesY = [self tilesTop];
     [_tiles enumerateObjectsUsingBlock:^(I18ModeTile *tile, NSUInteger index, __unused BOOL *stop) {
         tile.iconSize = iconSize;
-        tile.frame = CGRectMake(kSide + column * index, tilesY, column, 4.0 + iconSize + 8.0 + 18.0);
+        tile.frame = CGRectMake(kSide + column * index, tilesY, column, iconSize + 6.0 + kCaptionHeight);
     }];
 
-    CGFloat slidersY = tilesY + 4.0 + iconSize + 8.0 + 18.0 + 20.0;
-    CGFloat sliderX = kSide + 4.0;
+    CGFloat slidersY = tilesY + iconSize + 6.0 + kCaptionHeight + 18.0;
+    CGFloat sliderX = kSide + 2.0;
     _hueSlider.frame = CGRectMake(sliderX, slidersY, width - 2.0 * sliderX, kSliderHeight);
-    _toneSlider.frame = CGRectMake(sliderX, slidersY + kSliderHeight + 14.0, width - 2.0 * sliderX, kSliderHeight);
+    _toneSlider.frame = CGRectMake(sliderX, slidersY + kSliderHeight + kSliderGap, width - 2.0 * sliderX, kSliderHeight);
 
     CGFloat tintAlpha = tint ? 1.0 : 0.0;
     _hueSlider.alpha = tintAlpha;
@@ -439,7 +449,7 @@ static const CGFloat kSliderHeight = 34.0;
     [self syncControls];
     [UIView performWithoutAnimation:^{
         [self layoutCard];
-        self->_card.transform = CGAffineTransformMakeTranslation(0, self->_cardHeight + 40.0);
+        self->_card.transform = CGAffineTransformMakeTranslation(0, self->_cardHeight + 60.0);
     }];
     [_selection prepare];
     [self startWatchdog];
@@ -486,7 +496,7 @@ static const CGFloat kSliderHeight = 34.0;
         return;
     }
     [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        self->_card.transform = CGAffineTransformMakeTranslation(0, self->_cardHeight + 40.0);
+        self->_card.transform = CGAffineTransformMakeTranslation(0, self->_cardHeight + 60.0);
     } completion:finish];
 }
 
@@ -604,7 +614,7 @@ static const CGFloat kSliderHeight = 34.0;
     [_selection selectionChanged];
 
     [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
-        self->_card.transform = CGAffineTransformMakeTranslation(0, self->_cardHeight + 40.0);
+        self->_card.transform = CGAffineTransformMakeTranslation(0, self->_cardHeight + 60.0);
     } completion:nil];
     I18SetHomeScreenContentHidden(YES, YES);
 

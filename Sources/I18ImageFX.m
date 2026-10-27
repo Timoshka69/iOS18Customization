@@ -302,7 +302,9 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
             float L = fx_luma(c), S = fx_sat(c);
             float f[3];
 
-            if (lightPlate) {
+            if (flags & I18FXFlagKeepGlyph) {
+                f[0] = c[0]; f[1] = c[1]; f[2] = c[2];      // only swap the plate
+            } else if (lightPlate) {
                 if (L < 0.38f && S < 0.24f) {
                     float g = 0.95f - 0.35f * L;           // black text -> light text
                     f[0] = f[1] = f[2] = g;

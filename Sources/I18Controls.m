@@ -24,12 +24,12 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
     if ((self = [super initWithFrame:CGRectZero])) {
         _track = [[UIView alloc] init];
         _track.userInteractionEnabled = NO;
-        _track.backgroundColor = I18Dynamic([UIColor colorWithWhite:0.0 alpha:0.07], [UIColor colorWithWhite:1.0 alpha:0.10]);
+        _track.backgroundColor = I18Dynamic([UIColor colorWithWhite:0.0 alpha:0.07], [UIColor colorWithWhite:1.0 alpha:0.08]);
         [self addSubview:_track];
 
         _pill = [[UIView alloc] init];
         _pill.userInteractionEnabled = NO;
-        _pill.backgroundColor = I18Dynamic(UIColor.whiteColor, [UIColor colorWithWhite:1.0 alpha:0.24]);
+        _pill.backgroundColor = I18Dynamic(UIColor.whiteColor, [UIColor colorWithWhite:1.0 alpha:0.22]);
         _pill.layer.shadowColor = UIColor.blackColor.CGColor;
         _pill.layer.shadowOffset = CGSizeMake(0, 1);
         _pill.layer.shadowRadius = 3;
@@ -40,7 +40,7 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
             UILabel *label = [[UILabel alloc] init];
             label.text = title;
             label.textAlignment = NSTextAlignmentCenter;
-            label.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightMedium];
+            label.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightMedium];
             label.adjustsFontSizeToFitWidth = YES;
             label.minimumScaleFactor = 0.75;
             label.userInteractionEnabled = NO;
@@ -136,8 +136,8 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
 
 #pragma mark - Gradient slider
 
-static const CGFloat kTrackHeight = 26.0;
-static const CGFloat kThumbSize = 30.0;
+static const CGFloat kTrackHeight = 24.0;
+static const CGFloat kThumbSize = 28.0;
 
 @implementation I18GradientSlider {
     CAGradientLayer *_track;
@@ -158,7 +158,7 @@ static const CGFloat kThumbSize = 30.0;
         _thumb = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kThumbSize, kThumbSize)];
         _thumb.userInteractionEnabled = NO;
         _thumb.layer.cornerRadius = kThumbSize * 0.5;
-        _thumb.layer.borderWidth = 3.5;
+        _thumb.layer.borderWidth = 3.0;
         _thumb.layer.borderColor = UIColor.whiteColor.CGColor;
         _thumb.layer.shadowColor = UIColor.blackColor.CGColor;
         _thumb.layer.shadowOpacity = 0.28f;
@@ -322,7 +322,77 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
     return [UIColor colorWithRed:r1 + (r2 - r1) * amount green:g1 + (g2 - g1) * amount blue:b1 + (b2 - b1) * amount alpha:1.0];
 }
 
-@implementation I18StylePreview
+#pragma mark - Real Weather icon
+
+/// iOS 18 shows the Weather app icon in the four tiles. The icon is taken
+/// from the phone itself (the system Weather app) and turned into the dark
+/// and tinted versions with the same code that converts the home screen.
+static UIImage *I18WeatherIcon(void) {
+    static UIImage *icon;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        SEL sel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+        if ([UIImage respondsToSelector:sel]) {
+            icon = ((UIImage * (*)(Class, SEL, NSString *, int, CGFloat))objc_msgSend)([UIImage class], sel, @"com.apple.weather", 2, UIScreen.mainScreen.scale);
+        }
+        if (!icon.CGImage) {
+            NSBundle *weather = [NSBundle bundleWithPath:@"/Applications/Weather.app"];
+            for (NSString *name in @[@"AppIcon60x60", @"AppIcon", @"AppIcon-60"]) {
+                icon = [UIImage imageNamed:name inBundle:weather compatibleWithTraitCollection:nil];
+                if (icon.CGImage) break;
+            }
+        }
+        if (!icon.CGImage) icon = nil;
+    });
+    return icon;
+}
+
+typedef NS_ENUM(NSInteger, I18PreviewKind) {
+    I18PreviewDark,
+    I18PreviewTintReady,
+};
+
+static UIImage *I18ProcessIcon(UIImage *source, I18PreviewKind kind, const float *tintRGB) {
+    CGImageRef image = source.CGImage;
+    if (!image) return nil;
+    size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(space);
+    if (!context) return nil;
+    CGContextSetBlendMode(context, kCGBlendModeCopy);
+    CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+    uint8_t *pixels = CGBitmapContextGetData(context);
+    int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
+
+    I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, I18FXFlagKeepGlyph);
+    if (kind == I18PreviewTintReady) {
+        I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
+        if (tintRGB) {
+            I18FXMatrix matrix = I18FXIconTintMatrix(tintRGB);
+            I18FXApplyMatrix(pixels, (int)width, (int)height, bytesPerRow, &matrix);
+        }
+    }
+    CGImageRef output = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    if (!output) return nil;
+    UIImage *result = [UIImage imageWithCGImage:output scale:source.scale orientation:UIImageOrientationUp];
+    CGImageRelease(output);
+    return result;
+}
+
+static UIImage *I18WeatherDark(void) {
+    static UIImage *dark;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dark = I18ProcessIcon(I18WeatherIcon(), I18PreviewDark, NULL);
+    });
+    return dark;
+}
+
+@implementation I18StylePreview {
+    UIImage *_tinted;
+}
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
@@ -336,15 +406,39 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
 
 - (void)setStyle:(I18Style)style {
     _style = style;
+    _tinted = nil;
     [self setNeedsDisplay];
 }
 
 - (void)setTint:(UIColor *)tint {
     _tint = tint;
-    if (_style == I18StyleTinted) [self setNeedsDisplay];
+    if (_style != I18StyleTinted) return;
+    _tinted = nil;
+    [self setNeedsDisplay];
 }
 
-- (void)drawVariant:(I18Style)variant inContext:(CGContextRef)context size:(CGFloat)s {
+- (UIImage *)tintedWeather {
+    if (_tinted) return _tinted;
+    UIImage *base = I18WeatherIcon();
+    if (!base) return nil;
+    CGFloat r = 0, g = 0, b = 0, a = 1;
+    [self.tint getRed:&r green:&g blue:&b alpha:&a];
+    float rgb[3] = {(float)r, (float)g, (float)b};
+    _tinted = I18ProcessIcon(base, I18PreviewTintReady, rgb);
+    return _tinted;
+}
+
+/// Image for one look, or nil when the Weather icon is not available.
+- (UIImage *)imageForVariant:(I18Style)variant {
+    switch (variant) {
+        case I18StyleLight: return I18WeatherIcon();
+        case I18StyleDark: return I18WeatherDark();
+        case I18StyleTinted: return [self tintedWeather];
+        default: return nil;
+    }
+}
+
+- (void)drawFallbackVariant:(I18Style)variant inContext:(CGContextRef)context size:(CGFloat)s {
     CGRect area = CGRectMake(0, 0, s, s);
     UIBezierPath *plate = [UIBezierPath bezierPathWithRect:area];
     UIBezierPath *sun = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(s * 0.47, s * 0.20, s * 0.34, s * 0.34)];
@@ -379,16 +473,18 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
             cloudBottom = [UIColor colorWithRed:0.86 green:0.90 blue:0.97 alpha:1.0];
             break;
     }
-
     I18FillGradient(context, plate, plateTop, plateBottom, area);
     I18FillGradient(context, sun, sunTop, sunBottom, sun.bounds);
-
-    CGContextSaveGState(context);
-    CGContextSetShadowWithColor(context, CGSizeMake(0, s * 0.02), s * 0.05, [UIColor colorWithWhite:0 alpha:0.25].CGColor);
-    [cloudBottom setFill];
-    [cloud fill];
-    CGContextRestoreGState(context);
     I18FillGradient(context, cloud, cloudTop, cloudBottom, cloud.bounds);
+}
+
+- (void)drawVariant:(I18Style)variant inContext:(CGContextRef)context size:(CGFloat)s {
+    UIImage *image = [self imageForVariant:variant];
+    if (image) {
+        [image drawInRect:CGRectMake(0, 0, s, s)];
+    } else {
+        [self drawFallbackVariant:variant inContext:context size:s];
+    }
 }
 
 - (void)drawRect:(CGRect)rect {
@@ -400,6 +496,7 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
     [squircle addClip];
 
     if (_style == I18StyleAuto) {
+        // Light in the top-left half, dark in the bottom-right half.
         CGContextSaveGState(context);
         UIBezierPath *lightHalf = [UIBezierPath bezierPath];
         [lightHalf moveToPoint:CGPointMake(0, 0)];
@@ -431,19 +528,12 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
 
 @implementation I18ModeTile {
     UILabel *_caption;
-    CAShapeLayer *_ring;
 }
 
 - (instancetype)initWithStyle:(I18Style)style title:(NSString *)title {
     if ((self = [super initWithFrame:CGRectZero])) {
         _style = style;
-        _iconSize = 64.0;
-
-        _ring = [CAShapeLayer layer];
-        _ring.fillColor = UIColor.clearColor.CGColor;
-        _ring.lineWidth = 2.0;
-        _ring.opacity = 0.0f;
-        [self.layer addSublayer:_ring];
+        _iconSize = 58.0;
 
         _preview = [[I18StylePreview alloc] initWithFrame:CGRectZero];
         _preview.style = style;
@@ -460,7 +550,7 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
 
         self.accessibilityLabel = title;
         self.accessibilityTraits = UIAccessibilityTraitButton;
-        [self updateAppearance:NO];
+        [self updateAppearance];
     }
     return self;
 }
@@ -468,22 +558,8 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat s = _iconSize;
-    CGFloat x = round((self.bounds.size.width - s) * 0.5);
-    _preview.frame = CGRectMake(x, 4.0, s, s);
-    _caption.frame = CGRectMake(0, CGRectGetMaxY(_preview.frame) + 8.0, self.bounds.size.width, 18.0);
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    CGRect ringRect = CGRectInset(_preview.frame, -3.5, -3.5);
-    _ring.frame = self.bounds;
-    _ring.path = [UIBezierPath bezierPathWithRoundedRect:ringRect cornerRadius:s * 0.225 + 3.5].CGPath;
-    _ring.strokeColor = [UIColor.labelColor resolvedColorWithTraitCollection:self.traitCollection].CGColor;
-    [CATransaction commit];
-}
-
-- (void)traitCollectionDidChange:(UITraitCollection *)previous {
-    [super traitCollectionDidChange:previous];
-    [self setNeedsLayout];
+    _preview.frame = CGRectMake(round((self.bounds.size.width - s) * 0.5), 0.0, s, s);
+    _caption.frame = CGRectMake(0, CGRectGetMaxY(_preview.frame) + 6.0, self.bounds.size.width, 17.0);
 }
 
 - (void)setIconSize:(CGFloat)iconSize {
@@ -494,21 +570,14 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
 - (void)setChosen:(BOOL)chosen {
     if (_chosen == chosen) return;
     _chosen = chosen;
-    [self updateAppearance:YES];
+    [UIView transitionWithView:_caption duration:0.18 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        [self updateAppearance];
+    } completion:nil];
 }
 
-- (void)updateAppearance:(BOOL)animated {
-    _caption.font = [UIFont systemFontOfSize:12.5 weight:_chosen ? UIFontWeightSemibold : UIFontWeightRegular];
+- (void)updateAppearance {
+    _caption.font = [UIFont systemFontOfSize:13.0 weight:_chosen ? UIFontWeightSemibold : UIFontWeightRegular];
     _caption.textColor = _chosen ? UIColor.labelColor : UIColor.secondaryLabelColor;
-    float target = _chosen ? 0.32f : 0.0f;
-    if (animated) {
-        CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-        fade.fromValue = @(_ring.presentationLayer ? _ring.presentationLayer.opacity : _ring.opacity);
-        fade.toValue = @(target);
-        fade.duration = 0.2;
-        [_ring addAnimation:fade forKey:@"fade"];
-    }
-    _ring.opacity = target;
 }
 
 - (void)setHighlighted:(BOOL)highlighted {
@@ -534,7 +603,7 @@ static UIColor *I18Mix(UIColor *color, UIColor *other, CGFloat amount) {
 }
 
 - (void)setSymbol:(NSString *)symbol {
-    UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:20.0 weight:UIImageSymbolWeightRegular];
+    UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:19.0 weight:UIImageSymbolWeightRegular];
     UIImage *image = [UIImage systemImageNamed:symbol withConfiguration:configuration];
     [self setImage:image forState:UIControlStateNormal];
 }

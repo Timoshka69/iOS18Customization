@@ -85,6 +85,10 @@ void I18AdoptLayerTree(CALayer *layer, BOOL clock);
 /// change). With `animated` the change is cross-faded.
 void I18ReprocessAllContents(BOOL animated);
 
+/// Re-checks one icon's layers: contents in the right look, tint filter in
+/// place. Cheap; used whenever SpringBoard re-lays out an icon.
+void I18VerifyLayerTree(CALayer *root);
+
 /// The resolved look used by the layer subclass (kept in a plain global so it
 /// can be read from any thread).
 I18Look I18CurrentLook(void);
@@ -103,6 +107,8 @@ void I18ApplyIconSize(BOOL animated);    // Small / Large changed
 UIWindow * _Nullable I18HomeScreenWindow(void);
 void I18SetHomeScreenContentHidden(BOOL hidden, BOOL animated);
 void I18EndHomeScreenEditing(void);
+/// Finds and restyles every icon on screen (after lock / unlock, style changes).
+void I18SweepHomeScreen(void);
 
 #pragma mark - Edit button (I18EditButton.m)
 

@@ -34,6 +34,9 @@ I18FXResult I18FXMakeDark(uint8_t *px, int width, int height, int bytesPerRow);
 #define I18FXFlagClock 1
 /// Busy artwork that cannot be converted is dimmed harder (used for Tinted).
 #define I18FXFlagStrongDim 2
+/// Replace only the plate and keep the glyph colours (used for the Weather
+/// previews of the panel: white cloud and yellow sun on a dark plate).
+#define I18FXFlagKeepGlyph 4
 I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytesPerRow, int flags);
 
 /// Converts an already dark icon to grey levels that keep saturated glyphs

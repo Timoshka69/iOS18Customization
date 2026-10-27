@@ -28,6 +28,7 @@ static const CGFloat kLargeIconScale = 1.16;
 static const void *kGeometryKey = &kGeometryKey;
 static const void *kEligibleKey = &kEligibleKey;
 static const void *kStyledGenerationKey = &kStyledGenerationKey;
+static const void *kImageGenerationKey = &kImageGenerationKey;
 static const void *kLabelMaskKey = &kLabelMaskKey;
 static const void *kShiftKey = &kShiftKey;
 static const void *kOriginalGravityKey = &kOriginalGravityKey;
@@ -458,10 +459,14 @@ static void I18TintBadgeColor(float rgb[3]) {
 
 static void I18StyleImageView(UIView *imageView) {
     if (!imageView) return;
+    // The token lives on the image view itself: SpringBoard recycles image
+    // views between icons, so a token on the icon view would go stale.
+    objc_setAssociatedObject(imageView, kImageGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     I18Look look = I18CurrentLook();
     BOOL clock = I18ClassNameContains(imageView, @"Clock");
 
     I18AdoptLayerTree(imageView.layer, clock);
+    I18VerifyLayerTree(imageView.layer);
 
     if (look == I18LookTinted) {
         float rgb[3];
@@ -510,6 +515,11 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
     }
 }
 
+static BOOL I18ImageViewIsCurrent(UIView *imageView) {
+    NSNumber *token = objc_getAssociatedObject(imageView, kImageGenerationKey);
+    return token && token.unsignedIntegerValue == gStyleGeneration;
+}
+
 static void I18StyleIconView(UIView *iconView, BOOL force, BOOL animated) {
     if (!iconView) return;
     I18RefreshEligibility(iconView);
@@ -517,15 +527,44 @@ static void I18StyleIconView(UIView *iconView, BOOL force, BOOL animated) {
     if (imageView) {
         [gImageViews addObject:imageView];
         I18UpdateGeometry(imageView, NO);
+        if (force || !I18ImageViewIsCurrent(imageView)) {
+            I18StyleImageView(imageView);
+        } else {
+            // Contents or filters may have been replaced behind our back.
+            I18VerifyLayerTree(imageView.layer);
+        }
     }
-
-    NSNumber *styled = objc_getAssociatedObject(iconView, kStyledGenerationKey);
-    if (force || styled.unsignedIntegerValue != gStyleGeneration) {
-        objc_setAssociatedObject(iconView, kStyledGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        I18StyleImageView(imageView);
-    }
+    objc_setAssociatedObject(iconView, kStyledGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     // Cheap, and SpringBoard re-creates labels and badges on its own.
     I18StyleIconViewParts(iconView, imageView, animated);
+}
+
+/// Walks every window of SpringBoard's scene and styles each icon it finds,
+/// including ones that never passed through the hooks above.
+static void I18SweepView(UIView *view, int depth) {
+    if (!view || depth > 40) return;
+    if (gIconViewClass && [view isKindOfClass:gIconViewClass]) {
+        [gIconViews addObject:view];
+        I18StyleIconView(view, YES, NO);
+        return;
+    } else if (gIconImageViewClass && [view isKindOfClass:gIconImageViewClass]) {
+        [gImageViews addObject:view];
+        I18StyleImageView(view);
+        return;
+    }
+    for (UIView *sub in view.subviews) {
+        I18SweepView(sub, depth + 1);
+    }
+}
+
+void I18SweepHomeScreen(void) {
+    UIWindow *home = I18HomeScreenWindow();
+    UIWindowScene *scene = home.windowScene;
+    NSArray<UIWindow *> *windows = scene ? scene.windows : (home ? @[home] : @[]);
+    for (UIWindow *window in windows) {
+        if (window.hidden || I18ClassNameContains(window, @"I18")) continue;
+        I18SweepView(window, 0);
+    }
 }
 
 #pragma mark - Public entry points
@@ -554,6 +593,7 @@ void I18ApplyLook(BOOL animated) {
         objc_setAssociatedObject(iconView, kStyledGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         I18StyleIconViewParts(iconView, I18ImageViewOf(iconView), NO);
     }
+    I18SweepHomeScreen();
 }
 
 void I18ApplyTint(void) {
@@ -565,6 +605,7 @@ void I18ApplyTint(void) {
     I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
     for (UIView *imageView in gImageViews.allObjects) {
         I18SetMatrixFilter(imageView.layer, &matrix);
+        objc_setAssociatedObject(imageView, kImageGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     for (UIView *iconView in gIconViews.allObjects) {
         objc_setAssociatedObject(iconView, kStyledGenerationKey, @(gStyleGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -675,6 +716,17 @@ static void hIV_didMoveToWindow(UIView *self, SEL _cmd) {
     }
 }
 
+static IMP oIV_didMoveToSuperview;
+
+static void hIV_didMoveToSuperview(UIView *self, SEL _cmd) {
+    ((void (*)(id, SEL))oIV_didMoveToSuperview)(self, _cmd);
+    // Recycled image views change parents without leaving the window.
+    if (self.window && self.superview) {
+        [gImageViews addObject:self];
+        I18StyleImageView(self);
+    }
+}
+
 static void hIV_updateImageAnimated(UIView *self, SEL _cmd, BOOL animated) {
     ((void (*)(id, SEL, BOOL))oIV_updateImageAnimated)(self, _cmd, animated);
     if (self.window) I18StyleImageView(self);
@@ -730,6 +782,7 @@ void I18InstallHomeScreenHooks(void) {
     I18HookMethod(imageView, @selector(didMoveToWindow), (IMP)hIV_didMoveToWindow, &oIV_didMoveToWindow);
     I18HookMethod(imageView, NSSelectorFromString(@"updateImageAnimated:"), (IMP)hIV_updateImageAnimated, &oIV_updateImageAnimated);
     I18HookMethod(imageView, @selector(didAddSubview:), (IMP)hIV_didAddSubview, &oIV_didAddSubview);
+    I18HookMethod(imageView, @selector(didMoveToSuperview), (IMP)hIV_didMoveToSuperview, &oIV_didMoveToSuperview);
 
     // Geometry hooks only make sense as a set.
     if (class_getInstanceMethod(imageView, @selector(setFrame:)) && class_getInstanceMethod(imageView, @selector(setBounds:)) &&

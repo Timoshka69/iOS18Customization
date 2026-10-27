@@ -159,7 +159,7 @@ NSString *I18L(NSString *key) {
             table = @{
                 @"Edit": @"Изменить",
                 @"AddWidget": @"Добавить виджет",
-                @"Customize": @"Кастомизация",
+                @"Customize": @"Настроить",
                 @"Small": @"Малые",
                 @"Large": @"Крупные",
                 @"Light": @"Светлые",

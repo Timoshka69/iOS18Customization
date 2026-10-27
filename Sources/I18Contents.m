@@ -18,6 +18,7 @@
 static const void *kOriginalContentsKey = &kOriginalContentsKey;
 static const void *kClockFaceKey = &kClockFaceKey;
 static const void *kSourceImageKey = &kSourceImageKey;
+static const void *kDesiredFilterKey = &kDesiredFilterKey;
 
 static NSString *const kManagedPrefix = @"I18Managed_";
 static NSString *const kFilterName = @"i18ColorMatrix";
@@ -155,6 +156,25 @@ static void I18Managed_insertRelative(CALayer *self, SEL _cmd, CALayer *layer, C
     I18AdoptInsertedLayer(self, layer);
 }
 
+static BOOL I18IsOurFilter(id filter) {
+    return [I18ValueForKey(filter, @"name") isEqual:kFilterName];
+}
+
+/// SpringBoard sets its own filters on icon image views now and then (for
+/// example when the screen turns off and on again). Whatever it sets, our
+/// tint filter is kept at the end of the list, so an icon can never lose
+/// its colour or keep an old one.
+static void I18Managed_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
+    NSMutableArray *list = [NSMutableArray array];
+    for (id filter in filters) {
+        if (!I18IsOurFilter(filter)) [list addObject:filter];
+    }
+    id desired = objc_getAssociatedObject(self, kDesiredFilterKey);
+    if (desired) [list addObject:desired];
+    struct objc_super sup = {self, I18UnmanagedSuperclass(self)};
+    ((void (*)(struct objc_super *, SEL, NSArray *))objc_msgSendSuper)(&sup, _cmd, list.count ? list : nil);
+}
+
 static Class I18Managed_class(id self, SEL _cmd) {
     return I18UnmanagedSuperclass(self);
 }
@@ -172,6 +192,7 @@ static Class I18ManagedClassFor(Class base) {
     class_addMethod(managed, @selector(insertSublayer:atIndex:), (IMP)I18Managed_insertAtIndex, "v@:@I");
     class_addMethod(managed, @selector(insertSublayer:below:), (IMP)I18Managed_insertRelative, "v@:@@");
     class_addMethod(managed, @selector(insertSublayer:above:), (IMP)I18Managed_insertRelative, "v@:@@");
+    class_addMethod(managed, NSSelectorFromString(@"setFilters:"), (IMP)I18Managed_setFilters, "v@:@");
     class_addMethod(managed, @selector(class), (IMP)I18Managed_class, "#@:");
     objc_registerClassPair(managed);
     return managed;
@@ -222,6 +243,37 @@ void I18AdoptLayerTree(CALayer *layer, BOOL clock) {
     for (CALayer *sublayer in sublayers) {
         I18AdoptLayerTree(sublayer, clock);
     }
+}
+
+static void I18VerifyLayer(CALayer *layer, int depth) {
+    if (!layer || depth > 6) return;
+    if (I18IsManagedClass(object_getClass(layer))) {
+        id shown = layer.contents;
+        if (I18IsCGImage(shown)) {
+            id wanted = I18DisplayContentsForLayer(layer, I18SourceContents(shown));
+            // Something put contents in without going through -setContents:,
+            // or they belong to another look: run them through again.
+            if (wanted != shown) layer.contents = shown;
+        }
+        id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);
+        NSArray *filters = I18ValueForKey(layer, @"filters");
+        BOOL hasDesired = NO;
+        for (id filter in filters) {
+            if (filter == desired) hasDesired = YES;
+        }
+        if (desired && !hasDesired) [layer setValue:filters forKey:@"filters"];
+    }
+    for (CALayer *sublayer in [layer.sublayers copy]) {
+        I18VerifyLayer(sublayer, depth + 1);
+    }
+}
+
+void I18VerifyLayerTree(CALayer *root) {
+    if (!root) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    I18VerifyLayer(root, 0);
+    [CATransaction commit];
 }
 
 void I18ReprocessAllContents(BOOL animated) {
@@ -285,17 +337,18 @@ id I18MakeMatrixFilter(I18FXMatrix matrix) {
 void I18SetMatrixFilter(CALayer *layer, const I18FXMatrix *matrix) {
     if (!layer) return;
     NSArray *current = I18ValueForKey(layer, @"filters");
-    if (!matrix && current.count == 0) return;
+    id previous = objc_getAssociatedObject(layer, kDesiredFilterKey);
+    if (!matrix && !previous && current.count == 0) return;
+
+    id filter = matrix ? I18MakeMatrixFilter(*matrix) : nil;
+    objc_setAssociatedObject(layer, kDesiredFilterKey, filter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     NSMutableArray *filters = [NSMutableArray array];
-    for (id filter in current) {
-        if (![I18ValueForKey(filter, @"name") isEqual:kFilterName]) [filters addObject:filter];
+    for (id existing in current) {
+        if (!I18IsOurFilter(existing)) [filters addObject:existing];
     }
-    if (matrix) {
-        id filter = I18MakeMatrixFilter(*matrix);
-        if (filter) [filters addObject:filter];
-    }
-    if (!matrix && filters.count == current.count) return; // nothing of ours was there
+    if (filter) [filters addObject:filter];
+    if (!filter && filters.count == current.count) return; // nothing of ours was there
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
