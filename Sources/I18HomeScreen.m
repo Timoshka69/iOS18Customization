@@ -275,10 +275,10 @@ static void I18ApplyGeometry(UIView *view, I18Geometry *geometry, CGFloat scale)
     bounds.size = geometry.transformMode ? geometry.size : CGSizeMake(geometry.size.width * scale, geometry.size.height * scale);
     I18CallSetBounds(view, bounds);
 
-    // Grow downwards into the (now hidden) label area, top edge stays put.
-    CGPoint center = geometry.center;
-    center.y += geometry.size.height * (scale - 1.0) * 0.5;
-    I18CallSetCenter(view, center);
+    // The icon grows around its own middle. Every animation of SpringBoard
+    // (launch, close, unlock, jiggle) moves icons by their middle, so a large
+    // icon stays exactly where SpringBoard expects it and never slides.
+    I18CallSetCenter(view, geometry.center);
 
     if (geometry.transformMode) {
         CGAffineTransform transform = geometry.transform;
@@ -417,7 +417,7 @@ static void hIV_setTransform(UIView *self, SEL _cmd, CGAffineTransform transform
 }
 
 /// Animations and badges ask the icon view where its image is. For a large
-/// icon that is the large frame (same top edge and middle, bigger size).
+/// icon that is the large frame (same middle, bigger size).
 static IMP oV_iconImageFrame;
 
 static CGRect hV_iconImageFrame(UIView *self, SEL _cmd) {
@@ -427,7 +427,7 @@ static CGRect hV_iconImageFrame(UIView *self, SEL _cmd) {
     if (!geometry.valid || geometry.applied <= 1.001) return frame;
     if (!I18SizeClose(frame.size, geometry.size)) return frame; // already the large one
     CGFloat scale = geometry.applied;
-    return CGRectMake(frame.origin.x - frame.size.width * (scale - 1.0) * 0.5, frame.origin.y,
+    return CGRectMake(frame.origin.x - frame.size.width * (scale - 1.0) * 0.5, frame.origin.y - frame.size.height * (scale - 1.0) * 0.5,
                       frame.size.width * scale, frame.size.height * scale);
 }
 
@@ -448,13 +448,11 @@ static void I18ApplyWidgetScale(UIView *iconView, BOOL large, BOOL animated) {
     }
     NSNumber *applied = objc_getAssociatedObject(iconView, kWidgetScaleKey);
     if (!applied && scale <= 1.001) return;
+    // SpringBoard animating the widget's size must not make the scale jitter.
+    if (applied && scale > 1.001 && fabs(applied.doubleValue - scale) < 0.01) return;
 
-    CATransform3D target = CATransform3DIdentity;
-    if (scale > 1.001) {
-        // Scaled around the middle, then moved down so the top edge stays.
-        CGFloat dy = size.height * (scale - 1.0) * 0.5;
-        target = CATransform3DConcat(CATransform3DMakeScale(scale, scale, 1.0), CATransform3DMakeTranslation(0.0, dy, 0.0));
-    }
+    // Around the middle, like the icons, so rows and columns stay in line.
+    CATransform3D target = scale > 1.001 ? CATransform3DMakeScale(scale, scale, 1.0) : CATransform3DIdentity;
     if (CATransform3DEqualToTransform(layer.sublayerTransform, target)) return;
 
     [CATransaction begin];
@@ -524,17 +522,21 @@ static void I18ShiftCornerView(UIView *view, UIView *imageView, BOOL rightCorner
     BOOL oursActive = ours && CGAffineTransformEqualToTransform(current, ours.CGAffineTransformValue);
     if (!CGAffineTransformIsIdentity(current) && !oursActive) return; // SpringBoard is animating it
 
-    CGFloat dx = 0.0;
+    CGFloat dx = 0.0, dy = 0.0;
     I18Geometry *geometry = objc_getAssociatedObject(imageView, kGeometryKey);
     if (geometry.valid && geometry.applied > 1.001 && view.superview && imageView.superview) {
         CGFloat half = geometry.size.width * (geometry.applied - 1.0) * 0.5;
         CGFloat baseEdge = geometry.center.x + (rightCorner ? 0.5 : -0.5) * geometry.size.width;
         CGFloat largeEdge = baseEdge + (rightCorner ? half : -half);
         CGPoint center = [view.superview convertPoint:view.center toView:imageView.superview];
-        if (fabs(center.x - baseEdge) < fabs(center.x - largeEdge)) dx = rightCorner ? half : -half;
+        if (fabs(center.x - baseEdge) < fabs(center.x - largeEdge)) {
+            // Out to the corner of the large icon (it grew to all sides).
+            dx = rightCorner ? half : -half;
+            dy = -geometry.size.height * (geometry.applied - 1.0) * 0.5;
+        }
     }
 
-    CGAffineTransform shift = CGAffineTransformMakeTranslation(dx, 0.0);
+    CGAffineTransform shift = CGAffineTransformMakeTranslation(dx, dy);
     if (!CGAffineTransformEqualToTransform(shift, current)) view.transform = shift;
     if (dx == 0.0) objc_setAssociatedObject(view, kShiftKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     else objc_setAssociatedObject(view, kShiftKey, [NSValue valueWithCGAffineTransform:shift], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -960,6 +962,58 @@ static void hV_didMoveToSuperview(UIView *self, SEL _cmd) {
     I18StyleIconViewParts(self, imageView, NO);
 }
 
+#pragma mark - Hooks: app switcher icons
+
+/// The small app icons above the cards of the app switcher are plain image
+/// views. They get the same layer treatment as home screen icons, so they
+/// show the chosen look too.
+static IMP oUIV_didMoveToWindow;
+static const void *kSwitcherCheckedKey = &kSwitcherCheckedKey;
+
+static BOOL I18InSwitcher(UIView *view) {
+    int depth = 0;
+    for (UIView *current = view.superview; current && depth < 10; current = current.superview, depth++) {
+        if (I18ClassNameContains(current, @"Switcher")) return YES;
+    }
+    return NO;
+}
+
+static BOOL I18LooksLikeAppIcon(UIImageView *view) {
+    UIImage *image = view.image;
+    CGSize size = image ? image.size : view.bounds.size;
+    if (image && image.renderingMode == UIImageRenderingModeAlwaysTemplate) return NO; // symbols
+    return size.width >= 16.0 && size.width <= 72.0 && fabs(size.width - size.height) < 2.0;
+}
+
+static void I18CheckSwitcherImageView(UIImageView *view, BOOL retry) {
+    if (!view.window || I18ClassNameContains(view.window, @"I18")) return;
+    if (!I18InSwitcher(view)) return;
+    if (!I18LooksLikeAppIcon(view)) {
+        // Image or size not there yet: look once more on the next pass.
+        if (retry) {
+            __weak UIImageView *weakView = view;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                UIImageView *strongView = weakView;
+                if (strongView) I18CheckSwitcherImageView(strongView, NO);
+            });
+        }
+        return;
+    }
+    objc_setAssociatedObject(view, kSwitcherCheckedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [gImageViews addObject:view];
+    I18StyleImageView(view);
+}
+
+static void hUIV_didMoveToWindow(UIImageView *self, SEL _cmd) {
+    ((void (*)(id, SEL))oUIV_didMoveToWindow)(self, _cmd);
+    if (!self.window) return;
+    if (objc_getAssociatedObject(self, kSwitcherCheckedKey)) {
+        I18StyleImageView(self);
+        return;
+    }
+    I18CheckSwitcherImageView(self, YES);
+}
+
 #pragma mark - Hooks: SBRootFolderView
 
 static IMP oRF_layoutSubviews, oRF_setEditingAnimated;
@@ -1014,6 +1068,8 @@ void I18InstallHomeScreenHooks(void) {
             I18HookMethod(gIconViewClass, frameSel, (IMP)hV_iconImageFrame, &oV_iconImageFrame);
         }
     }
+
+    I18HookMethod([UIImageView class], @selector(didMoveToWindow), (IMP)hUIV_didMoveToWindow, &oUIV_didMoveToWindow);
 
     Class rootFolderView = objc_getClass("SBRootFolderView");
     I18HookMethod(rootFolderView, @selector(layoutSubviews), (IMP)hRF_layoutSubviews, &oRF_layoutSubviews);

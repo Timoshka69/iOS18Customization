@@ -470,7 +470,12 @@ static void hL_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
     for (id filter in filters) {
         if (!I18IsOurFilter(filter)) [list addObject:filter];
     }
-    if (kind == I18TintNone && hasOurs && I18CurrentLook() == I18LookTinted) {
+    // A copy of our filter on a layer we never tinted. SpringBoard copies
+    // filters from the icon onto other layers (for example the label after
+    // a launch) - those must not be coloured. Only a copy of the icon
+    // picture itself (it shows one of our converted images) keeps the tint.
+    BOOL showsOurImage = I18IsCGImage(self.contents) && objc_getAssociatedObject(self.contents, kSourceImageKey);
+    if (kind == I18TintNone && hasOurs && showsOurImage && I18CurrentLook() == I18LookTinted) {
         // A copy for an animation: give it the current icon colour.
         kind = I18TintIcon;
         objc_setAssociatedObject(self, kTintKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);

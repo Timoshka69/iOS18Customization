@@ -265,12 +265,23 @@ static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, i
 
 #pragma mark - one icon
 
-static I18FXResult fx_dim(uint8_t *px, int bpr, int x0, int y0, int w, int h, float amount) {
+/// Busy artwork (Maps, games, photos) has no plate that could be swapped.
+/// Light, greyish areas (the paper of a map, white backgrounds) are taken
+/// down hard so the icon reads as a dark icon; colourful parts are only
+/// dimmed a little, so the icon stays recognisable.
+static I18FXResult fx_busy_dark(uint8_t *px, int bpr, int x0, int y0, int w, int h, float amount) {
     for (int y = y0; y < y0 + h; y++) {
         uint8_t *row = px + (size_t)y * bpr;
         for (int x = x0; x < x0 + w; x++) {
             uint8_t *p = row + x * 4;
-            for (int i = 0; i < 3; i++) p[i] = (uint8_t)(p[i] * amount + 0.5f);
+            float c[3];
+            float a = fx_load(p, c);
+            if (a <= 0.0f) continue;
+            float L = fx_luma(c), S = fx_sat(c);
+            float paper = fx_smoothstep(0.42f, 0.86f, L) * (1.0f - fx_smoothstep(0.18f, 0.48f, S));
+            float k = amount * (1.0f - 0.70f * paper);
+            float o[3] = {c[0] * k, c[1] * k, c[2] * k};
+            fx_store(p, o, a);
         }
     }
     return I18FXDimmed;
@@ -437,7 +448,7 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     if (!plateFound) {
         // Busy artwork (Maps, games): keep it recognisable, just a bit darker.
         // In Tinted it becomes a mid-tone instead of a black square.
-        return fx_dim(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.48f : 0.80f);
+        return fx_busy_dark(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.66f : 0.86f);
     }
 
     float bgL = fx_luma(mid), bgS = fx_sat(mid);
@@ -447,6 +458,76 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     bool lightPlate = bgL > 0.84f && bgS < 0.20f;
     bool grayPlate = !lightPlate && bgS < 0.12f;
     uint8_t *keep = (flags & I18FXFlagKeepGlyph) ? NULL : fx_enclosed_islands(px, bpr, x0, y0, w, h, bx0, by0, bw, bh, &plate);
+
+    // Distance of every pixel to the plate, and the largest distance close
+    // to it. An anti-aliased edge pixel is a mix of glyph and plate: its
+    // share of glyph is (its distance) / (distance of the glyph next to it).
+    // Using that share instead of a threshold keeps every edge as smooth as
+    // in the original icon - no stair steps, no speckles.
+    size_t count = (size_t)w * (size_t)h;
+    float *dist = malloc(sizeof(float) * count);
+    float *near = malloc(sizeof(float) * count);
+    float *soft = keep ? malloc(sizeof(float) * count) : NULL;
+    if (!dist || !near || (keep && !soft)) {
+        free(dist); free(near); free(soft); free(keep);
+        return I18FXUntouched;
+    }
+    for (int y = 0; y < h; y++) {
+        const uint8_t *row = px + (size_t)(y0 + y) * bpr;
+        float t = fx_clamp((float)(y0 + y - by0) / (float)bh);
+        float bg[3] = {plate.base[0] + plate.slope[0] * t, plate.base[1] + plate.slope[1] * t, plate.base[2] + plate.slope[2] * t};
+        for (int x = 0; x < w; x++) {
+            float c[3];
+            float a = fx_load(row + (x0 + x) * 4, c);
+            dist[(size_t)y * w + x] = a > 0.0f ? fx_dist(c, bg) : 0.0f;
+        }
+    }
+    // 5x5 maximum, done as two 1D passes (near = scratch, then back).
+    const int radius = 2;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            float m = 0.0f;
+            for (int k = -radius; k <= radius; k++) {
+                int xx = x + k;
+                if (xx >= 0 && xx < w) m = fmaxf(m, dist[(size_t)y * w + xx]);
+            }
+            near[(size_t)y * w + x] = m;
+        }
+    }
+    float *column = malloc(sizeof(float) * (size_t)h);
+    if (!column) {
+        free(dist); free(near); free(soft); free(keep);
+        return I18FXUntouched;
+    }
+    for (int x = 0; x < w; x++) {
+        for (int y = 0; y < h; y++) column[y] = near[(size_t)y * w + x];
+        for (int y = 0; y < h; y++) {
+            float m = 0.0f;
+            for (int k = -radius; k <= radius; k++) {
+                int yy = y + k;
+                if (yy >= 0 && yy < h) m = fmaxf(m, column[yy]);
+            }
+            near[(size_t)y * w + x] = m;
+        }
+    }
+    free(column);
+    // Islands kept as glyph get a soft (3x3 averaged) edge too.
+    if (keep) {
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int sum = 0, n = 0;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int xx = x + dx, yy = y + dy;
+                        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                        sum += keep[(size_t)yy * w + xx];
+                        n++;
+                    }
+                }
+                soft[(size_t)y * w + x] = n ? (float)sum / (float)n : 0.0f;
+            }
+        }
+    }
 
     for (int y = y0; y < y0 + h; y++) {
         uint8_t *row = px + (size_t)y * bpr;
@@ -467,50 +548,69 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
             float c[3];
             float a = fx_load(p, c);
             if (a <= 0.0f) continue;
+            size_t i = (size_t)(y - y0) * (size_t)w + (size_t)(x - x0);
 
-            // Soft plate/glyph separation: anti-aliased edges and shading get
-            // in-between values instead of snapping, so nothing looks pixelated.
-            float m = fx_smoothstep(0.035f, 0.24f, fx_dist(c, bg));
-            bool island = keep && keep[(size_t)(y - y0) * (size_t)w + (size_t)(x - x0)];
-            if (island) m = 1.0f;
-            float L = fx_luma(c), S = fx_sat(c);
+            float d = dist[i], dn = near[i];
+            float gate = fx_smoothstep(0.035f, 0.12f, dn);          // is there a glyph around at all
+            float m = gate * fx_clamp(d / fmaxf(dn, 0.10f));
+            m = fx_smoothstep(0.0f, 1.0f, fx_clamp(m * 1.08f));      // a touch of contrast, still continuous
+
+            // The glyph colour this pixel was mixed from.
+            float g[3];
+            if (m > 0.02f) {
+                for (int k = 0; k < 3; k++) g[k] = fx_clamp(bg[k] + (c[k] - bg[k]) / fmaxf(m, 0.25f));
+            } else {
+                g[0] = c[0]; g[1] = c[1]; g[2] = c[2];
+            }
+            if (soft) {
+                float island = soft[i];
+                if (island > 0.0f) {
+                    m = fmaxf(m, island);
+                    for (int k = 0; k < 3; k++) g[k] = fx_lerp(g[k], c[k], island);
+                }
+            }
+
+            float L = fx_luma(g), S = fx_sat(g);
             float neutral = 1.0f - fx_smoothstep(0.16f, 0.34f, S);
             float f[3];
 
             if (flags & I18FXFlagKeepGlyph) {
-                f[0] = c[0]; f[1] = c[1]; f[2] = c[2];      // only swap the plate
+                f[0] = g[0]; f[1] = g[1]; f[2] = g[2];      // only swap the plate
             } else if (lightPlate) {
                 // Colours stay, black text / glyphs become light (Calendar, Reminders).
                 float lifted[3];
-                fx_lift(c, 0.72f, lifted);
+                fx_lift(g, 0.72f, lifted);
                 float flip = neutral * (1.0f - fx_smoothstep(0.30f, 0.60f, L));
-                float g = 0.95f - 0.35f * L;
-                for (int i = 0; i < 3; i++) f[i] = fx_lerp(lifted[i], g, flip);
+                float v = 0.95f - 0.35f * L;
+                for (int k = 0; k < 3; k++) f[k] = fx_lerp(lifted[k], v, flip);
             } else if (grayPlate) {
                 // Grey plates (Settings, Camera): keep the shading of the glyph,
                 // only brighter - never flip it, that looked like an inverted icon.
                 float lifted[3];
-                fx_lift(c, 0.62f, lifted);
-                float g = fx_clamp(0.36f + 0.62f * L);
-                for (int i = 0; i < 3; i++) f[i] = fx_lerp(lifted[i], g, neutral);
+                fx_lift(g, 0.62f, lifted);
+                float v = fx_clamp(0.36f + 0.62f * L);
+                for (int k = 0; k < 3; k++) f[k] = fx_lerp(lifted[k], v, neutral);
             } else {
                 // Coloured plate: white glyph takes the plate colour (Messages,
                 // Phone, Mail), dark glyph turns light, colours stay.
                 float lifted[3];
-                fx_lift(c, 0.62f, lifted);
+                fx_lift(g, 0.62f, lifted);
                 float white = fx_smoothstep(plateL + 0.05f, plateL + 0.22f, L) * neutral;
                 float black = (1.0f - fx_smoothstep(0.22f, 0.40f, L)) * neutral;
-                for (int i = 0; i < 3; i++) {
-                    float v = fx_lerp(lifted[i], vivid[i], white);
-                    f[i] = fx_lerp(v, 0.90f, black * (1.0f - white));
+                for (int k = 0; k < 3; k++) {
+                    float v = fx_lerp(lifted[k], vivid[k], white);
+                    f[k] = fx_lerp(v, 0.90f, black * (1.0f - white));
                 }
             }
 
             float o[3];
-            for (int i = 0; i < 3; i++) o[i] = dark[i] * (1.0f - m) + f[i] * m;
+            for (int k = 0; k < 3; k++) o[k] = dark[k] * (1.0f - m) + f[k] * m;
             fx_store(p, o, a);
         }
     }
+    free(dist);
+    free(near);
+    free(soft);
     free(keep);
     return I18FXConverted;
 }
