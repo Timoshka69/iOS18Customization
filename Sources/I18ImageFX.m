@@ -876,10 +876,15 @@ static void fx_tint_art_region(uint8_t *px, int bpr, int x0, int y0, int w, int 
 }
 
 void I18FXMakeTintGrey(uint8_t *px, int width, int height, int bytesPerRow) {
-    // Brightness for the tint matrix. Luma alone makes red and purple
-    // glyphs (Health, Pinterest, Podcasts) nearly black, so the brightest
-    // channel counts as much as luma: a vivid colour reads as bright, like
-    // it does in iOS 18.
+    // Splits a dark icon into what stays neutral and what takes the tint,
+    // one part per colour channel, so a single colour matrix can put them
+    // back together (I18FXIconTintMatrix):
+    //   R = the neutral part: the dark plate exactly as in the dark icon
+    //   G = how strongly the pixel is glyph (0...1, its brightness)
+    //   B = white highlights inside the glyph (a little lighter than the tint)
+    // The plate keeps the very same grey gradient as the dark icons, the
+    // glyph is the tint - like iOS 18. Vivid colours count as bright (red
+    // and purple glyphs must not get lost).
     for (int y = 0; y < height; y++) {
         uint8_t *row = px + (size_t)y * bytesPerRow;
         for (int x = 0; x < width; x++) {
@@ -890,7 +895,11 @@ void I18FXMakeTintGrey(uint8_t *px, int width, int height, int bytesPerRow) {
             float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
             float luma = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
             float g = 0.45f * mx + 0.55f * luma;
-            float o[3] = {g, g, g};
+            float glyph = fx_smoothstep(0.23f, 0.42f, g);
+            float o[3];
+            o[0] = luma * (1.0f - glyph);
+            o[1] = glyph * fx_clamp(g / 0.70f);
+            o[2] = glyph * fx_smoothstep(0.82f, 1.0f, g) * 0.55f;
             fx_store(p, o, a);
         }
     }
@@ -962,16 +971,22 @@ static I18FXMatrix fx_tint_ramp(const float tint[3], float plateLuma, float glyp
 }
 
 I18FXMatrix I18FXIconTintMatrix(const float rgb[3]) {
-    // Input are the grey levels of I18FXMakeTintGrey: a typical glyph is
-    // about 0.7 there, the plate about 0.1-0.2.
-    // The ramp starts at black: pure black stays a neutral near-black. A ramp
-    // that started above black ran backwards below it and turned black
-    // plates and night skies into the opposite colour (red under green,
-    // green under purple) - it looked like icons kept an old colour.
-    // Plate (luma ~0.13) a deep near-black, glyph (~0.72) the tint. The
-    // ramp starts at a very dark value, so below it nothing can turn into
-    // the opposite colour.
-    return fx_tint_ramp(rgb, 0.11f, 0.74f, 0.022f);
+    // Input are the channels of I18FXMakeTintGrey:
+    //   out = R (neutral plate) + G * tint + B * (white - tint)
+    float h, sat, v;
+    I18FXRGBToHSV(rgb, &h, &sat, &v);
+    float target[3] = {rgb[0], rgb[1], rgb[2]};
+    if (sat < 0.05f) target[0] = target[1] = target[2] = 0.78f;   // light grey glyphs
+    I18FXMatrix mx;
+    memset(&mx, 0, sizeof(mx));
+    for (int i = 0; i < 3; i++) {
+        float *row = mx.m + i * 5;
+        row[0] = 1.0f;
+        row[1] = target[i];
+        row[2] = 1.0f - target[i];
+    }
+    mx.m[18] = 1.0f;
+    return mx;
 }
 
 I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
@@ -981,7 +996,9 @@ I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
     // everything up to a mid grey becomes black, only text and graphics take
     // the tint. Starting at black, nothing can turn into the opposite colour.
     if (lightContent) return fx_tint_ramp(rgb, 0.42f, 1.0f, 0.0f);
-    return fx_tint_ramp(rgb, 0.34f, 0.90f, 0.0f);
+    // A dark widget background (luma ~0.11) stays a neutral dark grey like
+    // the dark widgets; text and graphics take the tint.
+    return fx_tint_ramp(rgb, 0.11f, 0.90f, 0.075f);
 }
 
 I18FXMatrix I18FXBadgeTintMatrix(const float rgb[3]) {

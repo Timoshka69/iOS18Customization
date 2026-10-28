@@ -551,10 +551,30 @@ void I18SetTintFilter(CALayer *layer, I18TintKind kind) {
     I18InstallTintFilter(layer, kind);
 }
 
+/// A layer above already carries the tint. Tinting this one too would
+/// colour the icon twice (with a deep tint that made glyphs disappear).
+static BOOL I18AncestorTinted(CALayer *layer) {
+    int depth = 0;
+    for (CALayer *parent = layer.superlayer; parent && depth < 12; parent = parent.superlayer, depth++) {
+        if (I18TintKindOf(parent) != I18TintNone || objc_getAssociatedObject(parent, kDesiredFilterKey)) return YES;
+    }
+    return NO;
+}
+
+static void I18DropTint(CALayer *layer) {
+    objc_setAssociatedObject(layer, kTintKindKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [gTintedLayers removeObject:layer];
+    I18InstallTintFilter(layer, I18TintNone);
+}
+
 static void I18VerifyTintFilter(CALayer *layer) {
     I18TintKind kind = I18TintKindOf(layer);
     id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);
     if (kind == I18TintNone && !desired) return;
+    if (I18AncestorTinted(layer)) {
+        I18DropTint(layer);
+        return;
+    }
     NSNumber *generation = objc_getAssociatedObject(layer, kTintGenerationKey);
     BOOL stale = generation.unsignedIntegerValue != gTintGeneration;
     BOOL present = !desired;
@@ -610,6 +630,14 @@ static void hL_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
     // a launch) - those must not be coloured. Only a copy of the icon
     // picture itself (it shows one of our converted images) keeps the tint.
     BOOL showsOurImage = I18IsCGImage(self.contents) && objc_getAssociatedObject(self.contents, kSourceImageKey);
+    if ((kind != I18TintNone || hasOurs) && I18AncestorTinted(self)) {
+        // Inside an already tinted layer: never a second tint.
+        objc_setAssociatedObject(self, kTintKindKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, kDesiredFilterKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [gTintedLayers removeObject:self];
+        kind = I18TintNone;
+        showsOurImage = NO;
+    }
     if (kind == I18TintNone && hasOurs && showsOurImage && I18CurrentLook() == I18LookTinted) {
         // A copy for an animation: give it the current icon colour.
         kind = I18TintIcon;
@@ -636,9 +664,24 @@ void I18InstallFilterHooks(void) {
 
 /// Walks a whole layer tree and brings every copy of our filter up to date
 /// (current colour, or gone when the look is not Tinted any more).
-static void I18FixTintFilters(CALayer *layer, int depth) {
+static void I18FixTintFilters(CALayer *layer, int depth, BOOL insideTinted) {
     if (!layer || depth > 80) return;
     NSArray *filters = I18ValueForKey(layer, @"filters");
+    if (insideTinted) {
+        // Never a tint inside a tinted layer.
+        if (I18TintKindOf(layer) != I18TintNone || objc_getAssociatedObject(layer, kDesiredFilterKey)) {
+            I18DropTint(layer);
+        } else {
+            for (id filter in filters) {
+                if (I18IsOurFilter(filter)) {
+                    I18InstallTintFilter(layer, I18TintNone);
+                    break;
+                }
+            }
+        }
+        for (CALayer *sublayer in [layer.sublayers copy]) I18FixTintFilters(sublayer, depth + 1, YES);
+        return;
+    }
     if (filters.count) {
         id ours = nil;
         for (id filter in filters) {
@@ -664,14 +707,15 @@ static void I18FixTintFilters(CALayer *layer, int depth) {
             }
         }
     }
+    BOOL tintedHere = I18TintKindOf(layer) != I18TintNone && objc_getAssociatedObject(layer, kDesiredFilterKey);
     for (CALayer *sublayer in [layer.sublayers copy]) {
-        I18FixTintFilters(sublayer, depth + 1);
+        I18FixTintFilters(sublayer, depth + 1, tintedHere);
     }
 }
 
 void I18FixTintFiltersInTree(CALayer *root) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    I18FixTintFilters(root, 0);
+    I18FixTintFilters(root, 0, NO);
     [CATransaction commit];
 }
