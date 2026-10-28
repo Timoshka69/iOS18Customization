@@ -412,6 +412,7 @@ typedef struct CAColorMatrix {
 static const void *kTintKindKey = &kTintKindKey;
 static const void *kTintGenerationKey = &kTintGenerationKey;
 static const void *kOurFilterKey = &kOurFilterKey;
+static const void *kFilterKindKey = &kFilterKindKey;
 
 static NSHashTable<CALayer *> *gTintedLayers;
 static NSUInteger gTintGeneration = 1;
@@ -511,6 +512,7 @@ static void I18InstallTintFilter(CALayer *layer, I18TintKind kind) {
     NSArray *current = I18ValueForKey(layer, @"filters");
     BOOL tinted = kind != I18TintNone && I18CurrentLook() == I18LookTinted;
     id filter = tinted ? I18MakeMatrixFilter(I18MatrixForTintKind(kind)) : nil;
+    if (filter) objc_setAssociatedObject(filter, kFilterKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(layer, kDesiredFilterKey, filter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(layer, kTintGenerationKey, @(gTintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -630,4 +632,46 @@ static void hL_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
 
 void I18InstallFilterHooks(void) {
     I18HookMethod([CALayer class], NSSelectorFromString(@"setFilters:"), (IMP)hL_setFilters, &oL_setFilters);
+}
+
+/// Walks a whole layer tree and brings every copy of our filter up to date
+/// (current colour, or gone when the look is not Tinted any more).
+static void I18FixTintFilters(CALayer *layer, int depth) {
+    if (!layer || depth > 80) return;
+    NSArray *filters = I18ValueForKey(layer, @"filters");
+    if (filters.count) {
+        id ours = nil;
+        for (id filter in filters) {
+            if (I18IsOurFilter(filter)) ours = filter;
+        }
+        if (ours) {
+            I18TintKind kind = I18TintKindOf(layer);
+            if (kind == I18TintNone) {
+                NSNumber *filterKind = objc_getAssociatedObject(ours, kFilterKindKey);
+                kind = filterKind ? (I18TintKind)filterKind.integerValue : I18TintIcon;
+                if (I18CurrentLook() == I18LookTinted) {
+                    objc_setAssociatedObject(layer, kTintKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    if (!gTintedLayers) gTintedLayers = [NSHashTable weakObjectsHashTable];
+                    [gTintedLayers addObject:layer];
+                } else {
+                    kind = I18TintNone;
+                }
+            }
+            NSNumber *generation = objc_getAssociatedObject(layer, kTintGenerationKey);
+            id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);
+            if (ours != desired || generation.unsignedIntegerValue != gTintGeneration || I18CurrentLook() != I18LookTinted) {
+                I18InstallTintFilter(layer, I18CurrentLook() == I18LookTinted ? kind : I18TintNone);
+            }
+        }
+    }
+    for (CALayer *sublayer in [layer.sublayers copy]) {
+        I18FixTintFilters(sublayer, depth + 1);
+    }
+}
+
+void I18FixTintFiltersInTree(CALayer *root) {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    I18FixTintFilters(root, 0);
+    [CATransaction commit];
 }

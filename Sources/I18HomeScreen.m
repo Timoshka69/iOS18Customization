@@ -677,9 +677,12 @@ static void I18StyleImageView(UIView *imageView) {
     I18Look look = I18CurrentLook();
     BOOL clock = I18ClassNameContains(imageView, @"Clock");
 
-    I18SetLayerBusyDark(imageView.layer, I18IsBusyDarkApp(imageView));
-    // Folder icons show several apps: no single pack icon for them.
-    I18SetLayerBundleID(imageView.layer, I18ClassNameContains(imageView, @"Folder") ? nil : I18BundleIDOfImageView(imageView));
+    // Only a real app icon image view stands for one app (pack icon, Maps).
+    // Folder icons show several apps, other image views (badges, switcher
+    // icons) none that can be told for sure.
+    BOOL appIcon = gIconImageViewClass && [imageView isKindOfClass:gIconImageViewClass] && !I18ClassNameContains(imageView, @"Folder");
+    I18SetLayerBusyDark(imageView.layer, appIcon && I18IsBusyDarkApp(imageView));
+    I18SetLayerBundleID(imageView.layer, appIcon ? I18BundleIDOfImageView(imageView) : nil);
     I18AdoptLayerTree(imageView.layer, clock);
     I18SetTintFilter(imageView.layer, look == I18LookTinted ? I18TintIcon : I18TintNone);
     // After the filter: the check also refreshes the tint of layers below
@@ -867,6 +870,9 @@ void I18SweepHomeScreen(void) {
     for (UIWindow *window in windows) {
         if (window.hidden || I18ClassNameContains(window, @"I18")) continue;
         I18SweepView(window, 0);
+        // Layers SpringBoard copied (snapshots, animation copies) carry a
+        // copy of our filter that nothing else would ever update.
+        I18FixTintFiltersInTree(window.layer);
     }
 }
 
@@ -1094,11 +1100,19 @@ static IMP oUIV_didMoveToWindow;
 static const void *kSwitcherCheckedKey = &kSwitcherCheckedKey;
 
 static BOOL I18InSwitcher(UIView *view) {
+    // Parts of an app icon (its badge, its delete button) are never one of
+    // the switcher's own icons, even while the icon itself is shown inside
+    // the switcher for the launch / close animation.
+    if (I18ClassNameContains(view, @"Badge") || I18ClassNameContains(view, @"Accessory")) return NO;
+    BOOL switcher = NO;
     int depth = 0;
-    for (UIView *current = view.superview; current && depth < 10; current = current.superview, depth++) {
-        if (I18ClassNameContains(current, @"Switcher")) return YES;
+    for (UIView *current = view.superview; current && depth < 12; current = current.superview, depth++) {
+        if (gIconViewClass && [current isKindOfClass:gIconViewClass]) return NO;
+        if (gIconImageViewClass && [current isKindOfClass:gIconImageViewClass]) return NO;
+        if (I18ClassNameContains(current, @"Badge") || I18ClassNameContains(current, @"Accessory")) return NO;
+        if (I18ClassNameContains(current, @"Switcher")) switcher = YES;
     }
-    return NO;
+    return switcher;
 }
 
 static BOOL I18LooksLikeAppIcon(UIImageView *view) {
@@ -1131,7 +1145,7 @@ static void hUIV_didMoveToWindow(UIImageView *self, SEL _cmd) {
     ((void (*)(id, SEL))oUIV_didMoveToWindow)(self, _cmd);
     if (!self.window) return;
     if (objc_getAssociatedObject(self, kSwitcherCheckedKey)) {
-        I18StyleImageView(self);
+        if (I18InSwitcher(self)) I18StyleImageView(self);
         return;
     }
     I18CheckSwitcherImageView(self, YES);

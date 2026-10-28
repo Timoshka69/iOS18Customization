@@ -120,6 +120,8 @@ void I18TintBadgeColor(float rgb[_Nonnull 3]);
 void I18SetTintFilter(CALayer *layer, I18TintKind kind);
 /// The colour changed: every tinted layer gets the new matrix.
 void I18RefreshTintFilters(void);
+/// Every copy of our filter in a layer tree gets the current colour.
+void I18FixTintFiltersInTree(CALayer *root);
 void I18InstallFilterHooks(void);
 
 #pragma mark - Home screen (I18HomeScreen.m)
