@@ -932,7 +932,7 @@ void I18FXApplyMatrix(uint8_t *px, int width, int height, int bytesPerRow, const
 }
 
 // Tinted like iOS 18: the dark icon's brightness decides everything. Its
-// near-black plate stays a neutral near-black, its glyph takes the tint, and
+// near-black plate stays a near-black with a breath of the tint, its glyph takes the tint, and
 // what is brighter than a usual glyph (white parts) goes past the tint
 // towards white, which keeps the details. Pictures without a dark version
 // simply become monochrome in the tint. Per channel:
@@ -964,14 +964,18 @@ static I18FXMatrix fx_tint_ramp(const float tint[3], float plateLuma, float glyp
 I18FXMatrix I18FXIconTintMatrix(const float rgb[3]) {
     // Input are the grey levels of I18FXMakeTintGrey: a typical glyph is
     // about 0.7 there, the plate about 0.1-0.2.
-    return fx_tint_ramp(rgb, 0.10f, 0.72f, 0.10f);
+    // The ramp starts at black: pure black stays a neutral near-black. A ramp
+    // that started above black ran backwards below it and turned black
+    // plates and night skies into the opposite colour (red under green,
+    // green under purple) - it looked like icons kept an old colour.
+    return fx_tint_ramp(rgb, 0.0f, 0.72f, 0.085f);
 }
 
 I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
     // Widgets that stay light (Weather: a sky picture behind white text):
     // the picture turns near-black, only the text takes the tint.
-    if (lightContent) return fx_tint_ramp(rgb, 0.40f, 0.90f, 0.10f);
-    return fx_tint_ramp(rgb, 0.10f, 0.62f, 0.10f);
+    if (lightContent) return fx_tint_ramp(rgb, 0.0f, 1.10f, 0.085f);
+    return fx_tint_ramp(rgb, 0.0f, 0.72f, 0.085f);
 }
 
 I18FXMatrix I18FXBadgeTintMatrix(const float rgb[3]) {
