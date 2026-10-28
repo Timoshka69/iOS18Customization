@@ -173,14 +173,12 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
     uint8_t *pixels = CGBitmapContextGetData(context);
     int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
 
-    int flags = (clockFace ? I18FXFlagClock : 0) | (tinted ? I18FXFlagStrongDim : 0) | (busyDark ? I18FXFlagBusyDark : 0);
-    // A pack icon already is the dark icon; for Tinted it is separated into
-    // plate and glyph like every other icon.
-    I18FXResult result = (pack && !tinted) ? I18FXConverted : I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
+    int flags = (clockFace ? I18FXFlagClock : 0) | (tinted ? I18FXFlagForTint : 0) | (busyDark ? I18FXFlagBusyDark : 0);
+    // A pack icon already is the dark icon (Tinted colourises it as it is).
+    I18FXResult result = pack ? I18FXConverted : I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
     if (tinted) {
-        // Icons with a plate: dark plate, glyph in the tint. Pictures without
-        // one: only recoloured (still a dark tile), never cut apart.
-        // (With the Tinted flag the conversion already leaves grey levels.)
+        // The dark icon (or, for a picture without a plate, a dark tile) is
+        // coloured on screen by the colour matrix.
         (void)result;
     } else if (result == I18FXUntouched || result == I18FXUnsupported) {
         // Dark look: an icon without a clean plate stays exactly as it is.

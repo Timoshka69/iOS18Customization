@@ -40,6 +40,9 @@ I18FXResult I18FXMakeDark(uint8_t *px, int width, int height, int bytesPerRow);
 #define I18FXFlagKeepGlyph 4
 /// Artwork without a plate (Maps) is darkened instead of left alone.
 #define I18FXFlagBusyDark 8
+/// The dark icon is made for Tinted (colourised afterwards): white glyphs
+/// stay white, pictures without a plate become a dark tile.
+#define I18FXFlagForTint 16
 I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytesPerRow, int flags);
 
 /// Converts an already dark icon to grey levels that keep saturated glyphs

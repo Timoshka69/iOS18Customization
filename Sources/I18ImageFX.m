@@ -117,7 +117,8 @@ void I18FXTintColor(float hue, float tone, float outRGB[3]) {
         s = 1.0f;
         v = 0.70f + 0.30f * (tone / I18_TONE_KNEE);
     } else {
-        s = 1.0f - 0.92f * ((tone - I18_TONE_KNEE) / (1.0f - I18_TONE_KNEE));
+        // The right end is grey (no colour at all), like iOS 18.
+        s = 1.0f - ((tone - I18_TONE_KNEE) / (1.0f - I18_TONE_KNEE));
         v = 1.0f;
     }
     I18FXHSVToRGB(hue, s, v, outRGB);
@@ -132,7 +133,7 @@ void I18FXHueToneFromRGB(const float rgb[3], float *hue, float *tone) {
     } else if (s > 0.97f) {
         t = fx_clamp((v - 0.70f) / 0.30f) * I18_TONE_KNEE;
     } else {
-        t = I18_TONE_KNEE + fx_clamp((1.0f - s) / 0.92f) * (1.0f - I18_TONE_KNEE);
+        t = I18_TONE_KNEE + fx_clamp(1.0f - s) * (1.0f - I18_TONE_KNEE);
     }
     if (hue) *hue = h;
     if (tone) *tone = fx_clamp(t);
@@ -619,7 +620,7 @@ static I18FXResult fx_dark_region_core(uint8_t *px, int bpr, int x0, int y0, int
                 // only brighter - never flip it, that looked like an inverted icon.
                 float lifted[3];
                 fx_lift(g, 0.62f, lifted);
-                float v = (flags & I18FXFlagStrongDim) ? fx_clamp(0.58f + 0.42f * L) : fx_clamp(0.36f + 0.62f * L);
+                float v = (flags & (I18FXFlagStrongDim | I18FXFlagForTint)) ? fx_clamp(0.58f + 0.42f * L) : fx_clamp(0.36f + 0.62f * L);
                 for (int k = 0; k < 3; k++) f[k] = fx_lerp(lifted[k], v, neutral);
             } else {
                 // Coloured plate: white glyph takes the plate colour (Messages,
@@ -627,7 +628,7 @@ static I18FXResult fx_dark_region_core(uint8_t *px, int bpr, int x0, int y0, int
                 float lifted[3];
                 fx_lift(g, 0.62f, lifted);
                 // (In Tinted white stays white: it becomes the full tint.)
-                float white = (flags & I18FXFlagStrongDim) ? 0.0f : fx_smoothstep(plateL + 0.05f, plateL + 0.22f, L) * neutral;
+                float white = (flags & (I18FXFlagStrongDim | I18FXFlagForTint)) ? 0.0f : fx_smoothstep(plateL + 0.05f, plateL + 0.22f, L) * neutral;
                 float black = (1.0f - fx_smoothstep(0.22f, 0.40f, L)) * neutral;
                 for (int k = 0; k < 3; k++) {
                     float v = fx_lerp(lifted[k], vivid[k], white);
@@ -664,6 +665,13 @@ static void fx_tint_art_region(uint8_t *px, int bpr, int x0, int y0, int w, int 
 /// colour matrix, whatever kind of icon it was.
 static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, int h, int flags) {
     I18FXResult result = fx_dark_region_core(px, bpr, x0, y0, w, h, flags);
+    if (flags & I18FXFlagForTint) {
+        // The dark icon is coloured by the matrix; a picture without a plate
+        // first becomes a dark tile with its drawing light.
+        if (result != I18FXUnsupported) return result;
+        fx_tint_art_region(px, bpr, x0, y0, w, h);
+        return I18FXConverted;
+    }
     if (!(flags & I18FXFlagStrongDim) || result == I18FXConverted) return result;
     if (result == I18FXUnsupported) fx_tint_art_region(px, bpr, x0, y0, w, h);
     else fx_tint_ready_region(px, bpr, x0, y0, w, h);
@@ -895,47 +903,50 @@ void I18FXApplyMatrix(uint8_t *px, int width, int height, int bytesPerRow, const
     }
 }
 
-static const float kLuma[3] = {0.299f, 0.587f, 0.114f};
+// Colourise like iOS 18 / Homescreen18: every pixel takes the hue and
+// saturation of the tint, its brightness follows the brightness of the dark
+// icon: level * (base + gain * luma). A saturation below 0.05 is grey.
+// Linear in luma, so it is one colour matrix (offsets on the alpha column,
+// the input is premultiplied).
+static const float kRec709[3] = {0.2126f, 0.7152f, 0.0722f};
 
-// out = plate * a + (tint - plate) * gain * (luma - l0 * a)
-static I18FXMatrix fx_luma_ramp(const float tint[3], const float plate[3], float l0, float l1, bool invert) {
+static I18FXMatrix fx_colorize(const float tint[3], float base, float gain) {
+    float h, sat, v;
+    I18FXRGBToHSV(tint, &h, &sat, &v);
+    float unit[3];
+    float level = fmaxf(v, 0.60f);
+    if (sat < 0.05f) {
+        // Grey (iOS 18 "no colour"): light grey glyphs, not pure white.
+        unit[0] = unit[1] = unit[2] = 1.0f;
+        level = 0.80f;
+    } else {
+        I18FXHSVToRGB(h, sat, 1.0f, unit);
+    }
     I18FXMatrix mx;
     memset(&mx, 0, sizeof(mx));
-    float gain = 1.0f / (l1 - l0);
     for (int i = 0; i < 3; i++) {
-        float k = (tint[i] - plate[i]) * gain;
+        float k = unit[i] * level;
         float *row = mx.m + i * 5;
-        if (!invert) {
-            row[0] = k * kLuma[0];
-            row[1] = k * kLuma[1];
-            row[2] = k * kLuma[2];
-            row[3] = plate[i] - k * l0;
-        } else {
-            // luma' = a - luma (light widgets become dark ones)
-            row[0] = -k * kLuma[0];
-            row[1] = -k * kLuma[1];
-            row[2] = -k * kLuma[2];
-            row[3] = plate[i] + k * (1.0f - l0);
-        }
+        row[0] = k * gain * kRec709[0];
+        row[1] = k * gain * kRec709[1];
+        row[2] = k * gain * kRec709[2];
+        row[3] = k * base;
     }
     mx.m[18] = 1.0f;
     return mx;
 }
 
 I18FXMatrix I18FXIconTintMatrix(const float rgb[3]) {
-    float plate[3];
-    // iOS 18: a near-black plate with only a breath of the tint.
-    for (int i = 0; i < 3; i++) plate[i] = rgb[i] * 0.045f + 0.05f;
-    return fx_luma_ramp(rgb, plate, 0.06f, 0.78f, false);
+    // The plate of a dark icon (luma ~0.13) ends up as a deep shade of the
+    // tint, the glyph at full tint brightness.
+    return fx_colorize(rgb, 0.03f, 0.97f);
 }
 
 I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
-    float plate[3];
-    for (int i = 0; i < 3; i++) plate[i] = rgb[i] * 0.09f + 0.05f;
-    // Widgets that stay light (Weather: a sky picture behind white text)
-    // need a steep ramp: the picture becomes the dark plate, the text tint.
-    if (lightContent) return fx_luma_ramp(rgb, plate, 0.66f, 0.95f, false);
-    return fx_luma_ramp(rgb, plate, 0.10f, 0.88f, false);
+    // Widgets that stay light (Weather: a sky picture behind white text):
+    // a steep ramp so the picture turns dark and only the text is coloured.
+    if (lightContent) return fx_colorize(rgb, -1.46f, 2.59f);
+    return fx_colorize(rgb, 0.03f, 0.97f);
 }
 
 I18FXMatrix I18FXBadgeTintMatrix(const float rgb[3]) {

@@ -59,9 +59,9 @@ static UIImage *I18SettingsIconForLook(UIImage *source, I18Look look) {
     int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
 
     BOOL tinted = look == I18LookTinted;
-    I18FXResult result = I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, tinted ? I18FXFlagStrongDim : 0);
+    I18FXResult result = I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, tinted ? I18FXFlagForTint : 0);
     if (tinted) {
-        // (With the Tinted flag the conversion already leaves grey levels.)
+        // The dark icon is coloured here (the list icons are tiny).
         (void)result;
         float rgb[3];
         [[I18Settings shared] tintRGB:rgb];
