@@ -40,7 +40,7 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
             UILabel *label = [[UILabel alloc] init];
             label.text = title;
             label.textAlignment = NSTextAlignmentCenter;
-            label.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightMedium];
+            label.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightMedium];
             label.adjustsFontSizeToFitWidth = YES;
             label.minimumScaleFactor = 0.75;
             label.userInteractionEnabled = NO;
@@ -136,8 +136,8 @@ static UIColor *I18Dynamic(UIColor *light, UIColor *dark) {
 
 #pragma mark - Gradient slider
 
-static const CGFloat kTrackHeight = 24.0;
-static const CGFloat kThumbSize = 28.0;
+static const CGFloat kTrackHeight = 27.0;
+static const CGFloat kThumbSize = 29.0;
 
 @implementation I18GradientSlider {
     CAGradientLayer *_track;
@@ -544,6 +544,7 @@ static UIImage *I18WeatherDark(void) {
 
 @implementation I18ModeTile {
     UILabel *_caption;
+    CAShapeLayer *_ring;
 }
 
 - (instancetype)initWithStyle:(I18Style)style title:(NSString *)title {
@@ -555,6 +556,13 @@ static UIImage *I18WeatherDark(void) {
         _preview.style = style;
         _preview.userInteractionEnabled = NO;
         [self addSubview:_preview];
+
+        // iOS 18 marks the chosen look with a thin rounded ring around it.
+        _ring = [CAShapeLayer layer];
+        _ring.fillColor = UIColor.clearColor.CGColor;
+        _ring.lineWidth = 2.0;
+        _ring.opacity = 0.0f;
+        [self.layer insertSublayer:_ring atIndex:0];
 
         _caption = [[UILabel alloc] init];
         _caption.text = title;
@@ -575,7 +583,30 @@ static UIImage *I18WeatherDark(void) {
     [super layoutSubviews];
     CGFloat s = _iconSize;
     _preview.frame = CGRectMake(round((self.bounds.size.width - s) * 0.5), 0.0, s, s);
-    _caption.frame = CGRectMake(0, CGRectGetMaxY(_preview.frame) + 6.0, self.bounds.size.width, 17.0);
+    _caption.frame = CGRectMake(-4.0, CGRectGetMaxY(_preview.frame) + 9.0, self.bounds.size.width + 8.0, 19.0);
+    CGRect ringRect = CGRectInset(_preview.frame, -5.0, -5.0);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _ring.frame = self.bounds;
+    _ring.path = [UIBezierPath bezierPathWithRoundedRect:ringRect cornerRadius:s * 0.225 + 5.0].CGPath;
+    _ring.strokeColor = [UIColor.labelColor resolvedColorWithTraitCollection:self.traitCollection].CGColor;
+    [CATransaction commit];
+    [self updateRingAnimated:NO];
+}
+
+- (void)updateRingAnimated:(BOOL)animated {
+    float target = _chosen ? 0.22f : 0.0f;
+    if (animated) {
+        CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        fade.fromValue = @((_ring.presentationLayer ?: _ring).opacity);
+        fade.toValue = @(target);
+        fade.duration = 0.22;
+        [_ring addAnimation:fade forKey:@"i18.ring"];
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _ring.opacity = target;
+    [CATransaction commit];
 }
 
 - (void)setIconSize:(CGFloat)iconSize {
@@ -589,10 +620,11 @@ static UIImage *I18WeatherDark(void) {
     [UIView transitionWithView:_caption duration:0.18 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
         [self updateAppearance];
     } completion:nil];
+    [self updateRingAnimated:YES];
 }
 
 - (void)updateAppearance {
-    _caption.font = [UIFont systemFontOfSize:13.0 weight:_chosen ? UIFontWeightSemibold : UIFontWeightRegular];
+    _caption.font = [UIFont systemFontOfSize:15.0 weight:_chosen ? UIFontWeightMedium : UIFontWeightRegular];
     _caption.textColor = _chosen ? UIColor.labelColor : UIColor.secondaryLabelColor;
 }
 
@@ -604,6 +636,139 @@ static UIImage *I18WeatherDark(void) {
     } completion:nil];
 }
 
+@end
+
+#pragma mark - Sun button
+
+/// The iOS 18 wallpaper button: a sun whose disc is half filled. Turning
+/// the dimming on fills the disc and draws the rays in; off reverses it.
+@implementation I18SunButton {
+    CAShapeLayer *_rays;
+    CAShapeLayer *_ringLayer;
+    CAShapeLayer *_fill;
+    CAShapeLayer *_fillMask;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        _rays = [CAShapeLayer layer];
+        _rays.fillColor = UIColor.clearColor.CGColor;
+        _rays.lineWidth = 1.8;
+        _rays.lineCap = kCALineCapRound;
+        [self.layer addSublayer:_rays];
+
+        _ringLayer = [CAShapeLayer layer];
+        _ringLayer.fillColor = UIColor.clearColor.CGColor;
+        _ringLayer.lineWidth = 1.8;
+        [self.layer addSublayer:_ringLayer];
+
+        _fill = [CAShapeLayer layer];
+        _fillMask = [CAShapeLayer layer];
+        _fillMask.fillColor = UIColor.blackColor.CGColor;
+        _fill.mask = _fillMask;
+        [self.layer addSublayer:_fill];
+        self.accessibilityTraits = UIAccessibilityTraitButton;
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGSize size = self.bounds.size;
+    CGPoint c = CGPointMake(size.width * 0.5, size.height * 0.5);
+    CGFloat r = 6.2, inner = 9.6, outer = 12.4;
+
+    UIBezierPath *rays = [UIBezierPath bezierPath];
+    for (int i = 0; i < 8; i++) {
+        CGFloat a = (CGFloat)i * M_PI / 4.0;
+        [rays moveToPoint:CGPointMake(c.x + cos(a) * inner, c.y + sin(a) * inner)];
+        [rays addLineToPoint:CGPointMake(c.x + cos(a) * outer, c.y + sin(a) * outer)];
+    }
+    UIBezierPath *disc = [UIBezierPath bezierPathWithArcCenter:c radius:r startAngle:0 endAngle:2.0 * M_PI clockwise:YES];
+    UIBezierPath *filled = [UIBezierPath bezierPathWithArcCenter:c radius:r - 0.2 startAngle:0 endAngle:2.0 * M_PI clockwise:YES];
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (CAShapeLayer *layer in @[_rays, _ringLayer, _fill, _fillMask]) layer.frame = self.bounds;
+    _rays.path = rays.CGPath;
+    _ringLayer.path = disc.CGPath;
+    _fill.path = filled.CGPath;
+    CGColorRef color = [UIColor.labelColor resolvedColorWithTraitCollection:self.traitCollection].CGColor;
+    _rays.strokeColor = color;
+    _ringLayer.strokeColor = color;
+    _fill.fillColor = color;
+    [CATransaction commit];
+    [self applyStateAnimated:NO];
+}
+
+- (UIBezierPath *)maskPathFilled:(BOOL)filled {
+    CGSize size = self.bounds.size;
+    CGFloat midX = size.width * 0.5;
+    // Off: the left half of the disc. On: all of it.
+    CGFloat width = filled ? size.width : midX;
+    return [UIBezierPath bezierPathWithRect:CGRectMake(0, 0, width, size.height)];
+}
+
+- (void)setOn:(BOOL)on {
+    [self setOn:on animated:NO];
+}
+
+- (void)setOn:(BOOL)on animated:(BOOL)animated {
+    if (_on == on && !animated) return;
+    _on = on;
+    [self applyStateAnimated:animated];
+}
+
+- (void)applyStateAnimated:(BOOL)animated {
+    UIBezierPath *mask = [self maskPathFilled:_on];
+    if (animated) {
+        CASpringAnimation *maskAnimation = [CASpringAnimation animationWithKeyPath:@"path"];
+        maskAnimation.fromValue = (__bridge id)((CAShapeLayer *)(_fillMask.presentationLayer ?: _fillMask)).path;
+        maskAnimation.toValue = (__bridge id)mask.CGPath;
+        maskAnimation.damping = 18.0;
+        maskAnimation.stiffness = 220.0;
+        maskAnimation.duration = maskAnimation.settlingDuration;
+        [_fillMask addAnimation:maskAnimation forKey:@"i18.fill"];
+
+        CASpringAnimation *pop = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+        pop.fromValue = @(0.78);
+        pop.toValue = @(1.0);
+        pop.damping = 11.0;
+        pop.stiffness = 260.0;
+        pop.duration = pop.settlingDuration;
+        [self.layer addAnimation:pop forKey:@"i18.pop"];
+
+        CABasicAnimation *rayFade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        rayFade.fromValue = @(((CAShapeLayer *)(_rays.presentationLayer ?: _rays)).opacity);
+        rayFade.toValue = @(_on ? 0.55f : 1.0f);
+        rayFade.duration = 0.3;
+        [_rays addAnimation:rayFade forKey:@"i18.rayFade"];
+
+        CAKeyframeAnimation *spin = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
+        spin.values = @[@0.0, @(_on ? M_PI / 4.0 : -M_PI / 4.0)];
+        spin.duration = 0.45;
+        spin.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        spin.additive = YES;
+        [_rays addAnimation:spin forKey:@"i18.spin"];
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _fillMask.path = mask.CGPath;
+    _rays.opacity = _on ? 0.55f : 1.0f;   // dimmed wallpaper: softer rays
+    [CATransaction commit];
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+    [super setHighlighted:highlighted];
+    [UIView animateWithDuration:0.18 animations:^{
+        self.alpha = highlighted ? 0.45 : 1.0;
+    }];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previous {
+    [super traitCollectionDidChange:previous];
+    [self setNeedsLayout];
+}
 @end
 
 #pragma mark - Glyph button

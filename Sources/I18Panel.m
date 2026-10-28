@@ -200,12 +200,12 @@ static const NSInteger kLoupeCells = 9;
 // Metrics follow the iOS 18 customization sheet.
 static const CGFloat kCardRadius = 32.0;
 static const CGFloat kSide = 18.0;          // inner padding of the sheet
-static const CGFloat kTopRowY = 12.0;
-static const CGFloat kTopRowHeight = 34.0;
-static const CGFloat kTilesGap = 14.0;
-static const CGFloat kCaptionHeight = 17.0;
+static const CGFloat kTopRowY = 14.0;
+static const CGFloat kTopRowHeight = 36.0;
+static const CGFloat kTilesGap = 20.0;
+static const CGFloat kCaptionHeight = 22.0;   // gap + 15 pt caption
 static const CGFloat kSliderHeight = 30.0;
-static const CGFloat kSliderGap = 14.0;
+static const CGFloat kSliderGap = 16.0;
 static const CGFloat kBottomPadding = 24.0;
 
 @interface I18Panel () <UIGestureRecognizerDelegate>
@@ -217,7 +217,7 @@ static const CGFloat kBottomPadding = 24.0;
     UIView *_card;
     UIVisualEffectView *_material;
 
-    I18GlyphButton *_sunButton;
+    I18SunButton *_sunButton;
     I18GlyphButton *_eyedropperButton;
     I18CapsuleSegment *_sizeSegment;
     NSArray<I18ModeTile *> *_tiles;
@@ -292,7 +292,8 @@ static const CGFloat kBottomPadding = 24.0;
     _cardPan.delegate = self;
     [_card addGestureRecognizer:_cardPan];
 
-    _sunButton = [[I18GlyphButton alloc] initWithSymbol:@"sun.max"];
+    _sunButton = [[I18SunButton alloc] initWithFrame:CGRectZero];
+    _sunButton.on = [I18Settings shared].dimWallpaper;
     _sunButton.accessibilityLabel = I18L(@"DimWallpaper");
     [_sunButton addTarget:self action:@selector(sunTapped) forControlEvents:UIControlEventTouchUpInside];
     [_card addSubview:_sunButton];
@@ -353,14 +354,15 @@ static const CGFloat kBottomPadding = 24.0;
 }
 
 - (CGFloat)contentHeightWithTint:(BOOL)tint iconSize:(CGFloat)iconSize {
-    CGFloat tilesBottom = [self tilesTop] + iconSize + 6.0 + kCaptionHeight;
+    CGFloat tilesBottom = [self tilesTop] + iconSize + 6.0 + kCaptionHeight;  // 6: room for the ring
     if (!tint) return tilesBottom + kBottomPadding;
     return tilesBottom + 18.0 + kSliderHeight + kSliderGap + kSliderHeight + kBottomPadding;
 }
 
 - (CGFloat)iconSizeForWidth:(CGFloat)width {
+    // Large tiles like iOS 18 (about 70 pt on a 375 pt wide screen).
     CGFloat column = (width - 2.0 * kSide) / 4.0;
-    return MIN(60.0, floor(column - 22.0));
+    return MIN(76.0, floor(column - 13.0));
 }
 
 - (void)layoutCard {
@@ -381,8 +383,8 @@ static const CGFloat kBottomPadding = 24.0;
     CGFloat rowMid = kTopRowY + kTopRowHeight * 0.5;
     _sunButton.frame = CGRectMake(kSide - 8.0, rowMid - 20.0, 40.0, 40.0);
     _eyedropperButton.frame = CGRectMake(width - kSide - 32.0, rowMid - 20.0, 40.0, 40.0);
-    CGFloat segmentWidth = MIN(132.0, width - 2.0 * (kSide + 56.0));
-    _sizeSegment.frame = CGRectMake(round((width - segmentWidth) * 0.5), rowMid - 14.0, segmentWidth, 28.0);
+    CGFloat segmentWidth = MIN(180.0, width - 2.0 * (kSide + 56.0));
+    _sizeSegment.frame = CGRectMake(round((width - segmentWidth) * 0.5), rowMid - 16.0, segmentWidth, 32.0);
 
     CGFloat column = (width - 2.0 * kSide) / _tiles.count;
     CGFloat tilesY = [self tilesTop];
@@ -431,7 +433,7 @@ static const CGFloat kBottomPadding = 24.0;
     if (!_toneSlider.dragging) _toneSlider.value = settings.tone;
     [self refreshToneTrack];
     [self refreshTintPreview];
-    [_sunButton setSymbol:settings.dimWallpaper ? @"sun.min.fill" : @"sun.max"];
+    [_sunButton setOn:settings.dimWallpaper animated:NO];
 }
 
 #pragma mark Show / hide
@@ -533,7 +535,7 @@ static const CGFloat kBottomPadding = 24.0;
     I18Settings *settings = [I18Settings shared];
     settings.dimWallpaper = !settings.dimWallpaper;
     [_selection selectionChanged];
-    [_sunButton setSymbol:settings.dimWallpaper ? @"sun.min.fill" : @"sun.max"];
+    [_sunButton setOn:settings.dimWallpaper animated:YES];
     I18WallpaperDimUpdate(YES);
 }
 

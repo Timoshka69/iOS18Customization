@@ -159,12 +159,21 @@ static void fx_lift(const float in[3], float minV, float out[3]) {
 #pragma mark - background sampling
 
 typedef struct {
-    float base[3];
-    float slope[3];
+    float base[3];   // colour at the top left
+    float su[3];     // change from left to right edge
+    float st[3];     // change from top to bottom edge
     float inliers;   // share of ring pixels that match the model
     float residual;  // mean distance of those pixels to the model
 } fx_plate;
 
+/// Plate colour at relative position (u, t), both 0...1.
+static inline void fx_plate_at(const fx_plate *plate, float u, float t, float out[3]) {
+    for (int i = 0; i < 3; i++) out[i] = fx_clamp(plate->base[i] + plate->su[i] * u + plate->st[i] * t);
+}
+
+/// Fits a flat or linearly graded plate (vertical, horizontal or diagonal
+/// gradients) to a ring just inside the icon edge, throwing outliers away,
+/// so glyphs that run close to the edge do not spoil it.
 static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, int bh, fx_plate *out) {
     int inner = (int)(bw * 0.025f), outer = (int)(bw * 0.085f);
     int innerY = (int)(bh * 0.025f), outerY = (int)(bh * 0.085f);
@@ -172,7 +181,7 @@ static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, i
     if (outerY <= innerY) outerY = innerY + 1;
 
     int capacity = 2 * (outer - inner + 1) * bh + 2 * (outerY - innerY + 1) * bw + 16;
-    float *samples = malloc(sizeof(float) * 4 * (size_t)capacity);
+    float *samples = malloc(sizeof(float) * 5 * (size_t)capacity);
     if (!samples) return false;
     int n = 0;
     unsigned int hist[3][256];
@@ -192,9 +201,10 @@ static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, i
             if (p[3] < 250) continue;
             float c[3];
             fx_load(p, c);
-            float *s = samples + n * 4;
-            s[0] = c[0]; s[1] = c[1]; s[2] = c[2];
-            s[3] = (float)dy / (float)bh;
+            float *sm = samples + n * 5;
+            sm[0] = c[0]; sm[1] = c[1]; sm[2] = c[2];
+            sm[3] = (float)dx / (float)bw;
+            sm[4] = (float)dy / (float)bh;
             for (int i = 0; i < 3; i++) hist[i][(int)(c[i] * 255.0f + 0.5f)]++;
             n++;
         }
@@ -205,7 +215,8 @@ static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, i
     }
 
     // Start from the per-channel median (robust against the glyph).
-    float base[3], slope[3] = {0, 0, 0};
+    fx_plate model;
+    memset(&model, 0, sizeof(model));
     for (int i = 0; i < 3; i++) {
         unsigned int acc = 0;
         int v = 0;
@@ -213,51 +224,53 @@ static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, i
             acc += hist[i][v];
             if (acc * 2 >= (unsigned int)n) break;
         }
-        base[i] = v / 255.0f;
+        model.base[i] = v / 255.0f;
     }
 
     float inlierShare = 0.0f, residual = 1.0f;
-    for (int pass = 0; pass < 4; pass++) {
-        double st = 0, stt = 0, sc[3] = {0, 0, 0}, stc[3] = {0, 0, 0}, dist = 0;
-        int m = 0;
+    for (int pass = 0; pass < 5; pass++) {
+        double S = 0, Su = 0, St = 0, Suu = 0, Sut = 0, Stt = 0, dist = 0;
+        double Sc[3] = {0, 0, 0}, Suc[3] = {0, 0, 0}, Stc[3] = {0, 0, 0};
         float limit = pass == 0 ? 0.16f : 0.11f;
         for (int k = 0; k < n; k++) {
-            const float *s = samples + k * 4;
-            float model[3] = {base[0] + slope[0] * s[3], base[1] + slope[1] * s[3], base[2] + slope[2] * s[3]};
-            float d = fx_dist(s, model);
+            const float *sm = samples + k * 5;
+            float expected[3];
+            for (int i = 0; i < 3; i++) expected[i] = model.base[i] + model.su[i] * sm[3] + model.st[i] * sm[4];
+            float d = fx_dist(sm, expected);
             if (d > limit) continue;
-            m++;
+            double u = sm[3], t = sm[4];
+            S += 1; Su += u; St += t; Suu += u * u; Sut += u * t; Stt += t * t;
             dist += d;
-            st += s[3];
-            stt += s[3] * s[3];
             for (int i = 0; i < 3; i++) {
-                sc[i] += s[i];
-                stc[i] += s[3] * s[i];
+                Sc[i] += sm[i];
+                Suc[i] += u * sm[i];
+                Stc[i] += t * sm[i];
             }
         }
-        if (m < 16) {
-            inlierShare = (float)m / (float)n;
-            break;
-        }
-        inlierShare = (float)m / (float)n;
-        residual = (float)(dist / m);
-        double denom = m * stt - st * st;
+        inlierShare = (float)(S / n);
+        if (S < 16) break;
+        residual = (float)(dist / S);
+        // Least squares for colour = base + su * u + st * t (Cramer's rule).
+        double a11 = S, a12 = Su, a13 = St, a22 = Suu, a23 = Sut, a33 = Stt;
+        double det = a11 * (a22 * a33 - a23 * a23) - a12 * (a12 * a33 - a23 * a13) + a13 * (a12 * a23 - a22 * a13);
         for (int i = 0; i < 3; i++) {
-            if (fabs(denom) < 1e-6) {
-                slope[i] = 0.0f;
-                base[i] = (float)(sc[i] / m);
-            } else {
-                slope[i] = (float)((m * stc[i] - st * sc[i]) / denom);
-                base[i] = (float)((sc[i] - slope[i] * st) / m);
+            if (fabs(det) < 1e-6) {
+                model.base[i] = (float)(Sc[i] / S);
+                model.su[i] = model.st[i] = 0.0f;
+                continue;
             }
+            double b1 = Sc[i], b2 = Suc[i], b3 = Stc[i];
+            double d1 = b1 * (a22 * a33 - a23 * a23) - a12 * (b2 * a33 - a23 * b3) + a13 * (b2 * a23 - a22 * b3);
+            double d2 = a11 * (b2 * a33 - a23 * b3) - b1 * (a12 * a33 - a23 * a13) + a13 * (a12 * b3 - b2 * a13);
+            double d3 = a11 * (a22 * b3 - b2 * a23) - a12 * (a12 * b3 - b2 * a13) + b1 * (a12 * a23 - a22 * a13);
+            model.base[i] = (float)(d1 / det);
+            model.su[i] = (float)(d2 / det);
+            model.st[i] = (float)(d3 / det);
         }
     }
     free(samples);
 
-    for (int i = 0; i < 3; i++) {
-        out->base[i] = base[i];
-        out->slope[i] = slope[i];
-    }
+    *out = model;
     out->inliers = inlierShare;
     out->residual = residual;
     return true;
@@ -305,10 +318,11 @@ static uint8_t *fx_enclosed_islands(const uint8_t *px, int bpr, int x0, int y0, 
     for (int y = 0; y < h; y++) {
         const uint8_t *row = px + (size_t)(y0 + y) * bpr;
         float t = fx_clamp((float)(y0 + y - by0) / (float)bh);
-        float bg[3] = {plate->base[0] + plate->slope[0] * t, plate->base[1] + plate->slope[1] * t, plate->base[2] + plate->slope[2] * t};
         for (int x = 0; x < w; x++) {
             const uint8_t *p = row + (x0 + x) * 4;
             if (p[3] < 8) { state[y * w + x] = 2; continue; }   // outside the icon counts as edge
+            float bg[3];
+            fx_plate_at(plate, fx_clamp((float)(x0 + x - bx0) / (float)bw), t, bg);
             float c[3];
             fx_load(p, c);
             if (fx_dist(c, bg) < 0.14f) state[y * w + x] = 1;
@@ -427,29 +441,28 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
     if (bw < 12 || bh < 12) return I18FXUntouched;
 
-    // Plate model: colour = base + slope * t, t = 0 at the top edge and 1 at
-    // the bottom. It is fitted to a ring just inside the icon edge with
-    // outliers thrown away, so glyphs that run close to the edge (Safari's
-    // compass, the Photos flower, the Mail envelope) do not spoil it.
+    // Plate model: a flat colour or a linear gradient in any direction, fitted
+    // to a ring just inside the icon edge (see fx_fit_plate).
     fx_plate plate;
     if (!fx_fit_plate(px, bpr, bx0, by0, bw, bh, &plate)) return I18FXUntouched;
 
-    float mid[3];
-    for (int i = 0; i < 3; i++) mid[i] = plate.base[i] + plate.slope[i] * 0.5f;
-    float topC[3], bottomC[3];
-    for (int i = 0; i < 3; i++) {
-        topC[i] = plate.base[i];
-        bottomC[i] = plate.base[i] + plate.slope[i];
-    }
-    bool plateFound = plate.inliers >= 0.40f && plate.residual <= 0.06f;
-    if (plateFound && fx_luma(topC) < 0.26f && fx_luma(bottomC) < 0.26f) {
-        return I18FXUntouched; // already dark
-    }
+    float mid[3], corners[4][3];
+    fx_plate_at(&plate, 0.5f, 0.5f, mid);
+    fx_plate_at(&plate, 0.0f, 0.0f, corners[0]);
+    fx_plate_at(&plate, 1.0f, 0.0f, corners[1]);
+    fx_plate_at(&plate, 0.0f, 1.0f, corners[2]);
+    fx_plate_at(&plate, 1.0f, 1.0f, corners[3]);
+    bool plateFound = plate.inliers >= 0.62f && plate.residual <= 0.05f;
     if (!plateFound) {
-        // Busy artwork (Maps, games): keep it recognisable, just a bit darker.
-        // In Tinted it becomes a mid-tone instead of a black square.
-        return fx_busy_dark(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.66f : 0.86f);
+        // No clean plate (pictures, games, photos): not an icon that can be
+        // given a dark background without spoiling it. Left exactly as it
+        // is - only Maps-like artwork is darkened when asked for.
+        if (flags & I18FXFlagBusyDark) return fx_busy_dark(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.66f : 0.86f);
+        return I18FXUnsupported;
     }
+    bool dark = true;
+    for (int k = 0; k < 4; k++) dark = dark && fx_luma(corners[k]) < 0.26f;
+    if (dark) return I18FXUntouched; // already a dark icon
 
     float bgL = fx_luma(mid), bgS = fx_sat(mid);
     // White plates (Calendar, Reminders, Photos): black text turns light.
@@ -472,15 +485,26 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
         free(dist); free(near); free(soft); free(keep);
         return I18FXUntouched;
     }
+    size_t opaque = 0, glyphPixels = 0;
     for (int y = 0; y < h; y++) {
         const uint8_t *row = px + (size_t)(y0 + y) * bpr;
         float t = fx_clamp((float)(y0 + y - by0) / (float)bh);
-        float bg[3] = {plate.base[0] + plate.slope[0] * t, plate.base[1] + plate.slope[1] * t, plate.base[2] + plate.slope[2] * t};
         for (int x = 0; x < w; x++) {
-            float c[3];
+            float bg[3], c[3];
+            fx_plate_at(&plate, fx_clamp((float)(x0 + x - bx0) / (float)bw), t, bg);
             float a = fx_load(row + (x0 + x) * 4, c);
-            dist[(size_t)y * w + x] = a > 0.0f ? fx_dist(c, bg) : 0.0f;
+            float d = a > 0.0f ? fx_dist(c, bg) : 0.0f;
+            dist[(size_t)y * w + x] = d;
+            if (a > 0.5f) {
+                opaque++;
+                if (d > 0.15f) glyphPixels++;
+            }
         }
+    }
+    // A "plate" that is only a thin frame around a big picture: leave it.
+    if (!(flags & I18FXFlagKeepGlyph) && opaque > 0 && (float)glyphPixels / (float)opaque > 0.70f) {
+        free(dist); free(near); free(soft); free(keep);
+        return I18FXUnsupported;
     }
     // 5x5 maximum, done as two 1D passes (near = scratch, then back).
     const int radius = 2;
@@ -532,14 +556,6 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     for (int y = y0; y < y0 + h; y++) {
         uint8_t *row = px + (size_t)y * bpr;
         float t = fx_clamp((float)(y - by0) / (float)bh);
-        float bg[3] = {
-            fx_clamp(plate.base[0] + plate.slope[0] * t),
-            fx_clamp(plate.base[1] + plate.slope[1] * t),
-            fx_clamp(plate.base[2] + plate.slope[2] * t),
-        };
-        float plateL = fx_luma(bg);
-        float vivid[3];
-        fx_vivid(bg, vivid);
         float darkV = fx_lerp(I18_DARK_TOP, I18_DARK_BOTTOM, t);
         float dark[3] = {darkV, darkV, darkV};
 
@@ -548,6 +564,11 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
             float c[3];
             float a = fx_load(p, c);
             if (a <= 0.0f) continue;
+            float bg[3];
+            fx_plate_at(&plate, fx_clamp((float)(x - bx0) / (float)bw), t, bg);
+            float plateL = fx_luma(bg);
+            float vivid[3];
+            fx_vivid(bg, vivid);
             size_t i = (size_t)(y - y0) * (size_t)w + (size_t)(x - x0);
 
             float d = dist[i], dn = near[i];
@@ -588,14 +609,15 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
                 // only brighter - never flip it, that looked like an inverted icon.
                 float lifted[3];
                 fx_lift(g, 0.62f, lifted);
-                float v = fx_clamp(0.36f + 0.62f * L);
+                float v = (flags & I18FXFlagStrongDim) ? fx_clamp(0.58f + 0.42f * L) : fx_clamp(0.36f + 0.62f * L);
                 for (int k = 0; k < 3; k++) f[k] = fx_lerp(lifted[k], v, neutral);
             } else {
                 // Coloured plate: white glyph takes the plate colour (Messages,
                 // Phone, Mail), dark glyph turns light, colours stay.
                 float lifted[3];
                 fx_lift(g, 0.62f, lifted);
-                float white = fx_smoothstep(plateL + 0.05f, plateL + 0.22f, L) * neutral;
+                // (In Tinted white stays white: it becomes the full tint.)
+                float white = (flags & I18FXFlagStrongDim) ? 0.0f : fx_smoothstep(plateL + 0.05f, plateL + 0.22f, L) * neutral;
                 float black = (1.0f - fx_smoothstep(0.22f, 0.40f, L)) * neutral;
                 for (int k = 0; k < 3; k++) {
                     float v = fx_lerp(lifted[k], vivid[k], white);
@@ -733,7 +755,8 @@ I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytes
                 int x0 = colRuns[c].start, x1 = colRuns[c].end;
                 int y0 = rowRuns[r].start, y1 = rowRuns[r].end;
                 I18FXResult one = fx_dark_region(px, bytesPerRow, x0, y0, x1 - x0 + 1, y1 - y0 + 1, flags);
-                if (one != I18FXUntouched) result = I18FXConverted;
+                if (one == I18FXConverted || one == I18FXDimmed) result = I18FXConverted;
+                else if (one == I18FXUnsupported && result == I18FXUntouched) result = I18FXUnsupported;
             }
         }
         return result;
@@ -758,7 +781,42 @@ void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow) {
             if (a <= 0.0f) continue;
             float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
             // Slight curve keeps light details (needles, ticks) apart from the glyph.
+            // Glyphs come out at the full tint like in iOS 18, the dark plate
+            // stays dark; the curve keeps light details apart from the glyph.
             float g = powf(0.50f * mx + 0.50f * fx_luma(c), 1.45f);
+            float o[3] = {g, g, g};
+            fx_store(p, o, a);
+        }
+    }
+}
+
+void I18FXMakeTintReadyArt(uint8_t *px, int width, int height, int bytesPerRow) {
+    // Pictures without a plate are only recoloured, but always end up as a
+    // dark tile like every other tinted icon: a mostly light picture has its
+    // brightness turned around (light background -> dark, drawing -> tint),
+    // a dark one keeps it.
+    double sum = 0.0;
+    size_t count = 0;
+    for (int y = 0; y < height; y++) {
+        const uint8_t *row = px + (size_t)y * bytesPerRow;
+        for (int x = 0; x < width; x++) {
+            float c[3];
+            if (fx_load(row + x * 4, c) > 0.5f) {
+                sum += 0.5f * fmaxf(c[0], fmaxf(c[1], c[2])) + 0.5f * fx_luma(c);
+                count++;
+            }
+        }
+    }
+    bool light = count && sum / (double)count > 0.55;
+    for (int y = 0; y < height; y++) {
+        uint8_t *row = px + (size_t)y * bytesPerRow;
+        for (int x = 0; x < width; x++) {
+            uint8_t *p = row + x * 4;
+            float c[3];
+            float a = fx_load(p, c);
+            if (a <= 0.0f) continue;
+            float v = 0.5f * fmaxf(c[0], fmaxf(c[1], c[2])) + 0.5f * fx_luma(c);
+            float g = light ? 0.04f + 0.86f * powf(1.0f - v, 1.15f) : 0.04f + 0.86f * powf(v, 1.3f);
             float o[3] = {g, g, g};
             fx_store(p, o, a);
         }

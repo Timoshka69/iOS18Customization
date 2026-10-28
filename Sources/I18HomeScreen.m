@@ -447,20 +447,27 @@ static void I18ApplyWidgetScale(UIView *iconView, BOOL large, BOOL animated) {
         scale = MIN(MAX(scale, 1.0), 1.12);
     }
     NSNumber *applied = objc_getAssociatedObject(iconView, kWidgetScaleKey);
-    if (!applied && scale <= 1.001) return;
+    if (!applied && scale <= 1.001 && CATransform3DEqualToTransform(layer.sublayerTransform, CATransform3DIdentity)) return;
     // SpringBoard animating the widget's size must not make the scale jitter.
-    if (applied && scale > 1.001 && fabs(applied.doubleValue - scale) < 0.01) return;
+    if (applied && scale > 1.001 && fabs(applied.doubleValue - scale) < 0.01) scale = applied.doubleValue;
 
     // Around the middle, like the icons, so rows and columns stay in line.
     CATransform3D target = scale > 1.001 ? CATransform3DMakeScale(scale, scale, 1.0) : CATransform3DIdentity;
-    if (CATransform3DEqualToTransform(layer.sublayerTransform, target)) return;
+    CATransform3D current = layer.sublayerTransform;
+    if (CATransform3DEqualToTransform(current, target)) return;
+    // A transform that is neither ours nor none belongs to a SpringBoard
+    // animation: leave it, ours comes back with the next layout pass.
+    CATransform3D ours = applied ? CATransform3DMakeScale(applied.doubleValue, applied.doubleValue, 1.0) : CATransform3DIdentity;
+    if (!CATransform3DEqualToTransform(current, CATransform3DIdentity) && !CATransform3DEqualToTransform(current, ours)) return;
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     if (animated && iconView.window) {
         CASpringAnimation *spring = [CASpringAnimation animationWithKeyPath:@"sublayerTransform"];
-        spring.damping = 26.0;
-        spring.stiffness = 260.0;
+        // Same curve as the UIView spring the icons use (0.5 s, damping 0.82),
+        // so widgets and icons grow together.
+        spring.damping = 20.6;
+        spring.stiffness = 158.0;
         spring.mass = 1.0;
         spring.fromValue = [NSValue valueWithCATransform3D:(layer.presentationLayer ?: layer).sublayerTransform];
         spring.toValue = [NSValue valueWithCATransform3D:target];
@@ -642,6 +649,20 @@ static void I18ForceWidgetAppearance(UIView *part, BOOL dark) {
     I18ForceWidgetAppearanceIn(part, dark, 0);
 }
 
+/// Apps whose icon is a picture (no plate) but has a dark version in iOS 18.
+static BOOL I18IsBusyDarkApp(UIView *imageView) {
+    UIView *iconView = I18IconViewContaining(imageView);
+    id icon = I18Call(iconView, @"icon");
+    id bundle = I18Call(icon, @"applicationBundleID");
+    if (![bundle isKindOfClass:[NSString class]]) return NO;
+    static NSSet<NSString *> *apps;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        apps = [NSSet setWithArray:@[@"com.apple.Maps"]];
+    });
+    return [apps containsObject:bundle];
+}
+
 static void I18StyleImageView(UIView *imageView) {
     if (!imageView) return;
     // The token lives on the image view itself: SpringBoard recycles image
@@ -650,6 +671,7 @@ static void I18StyleImageView(UIView *imageView) {
     I18Look look = I18CurrentLook();
     BOOL clock = I18ClassNameContains(imageView, @"Clock");
 
+    I18SetLayerBusyDark(imageView.layer, I18IsBusyDarkApp(imageView));
     I18AdoptLayerTree(imageView.layer, clock);
     I18SetTintFilter(imageView.layer, look == I18LookTinted ? I18TintIcon : I18TintNone);
     // After the filter: the check also refreshes the tint of layers below

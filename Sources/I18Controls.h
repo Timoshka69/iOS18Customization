@@ -42,7 +42,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) CGFloat iconSize;
 @end
 
-/// Round icon button (sun, eyedropper).
+/// The iOS 18 wallpaper dimming button (drawn sun, half / fully filled).
+@interface I18SunButton : UIControl
+@property (nonatomic, getter=isOn) BOOL on;
+- (void)setOn:(BOOL)on animated:(BOOL)animated;
+@end
+
+/// Round icon button (eyedropper).
 @interface I18GlyphButton : UIButton
 - (instancetype)initWithSymbol:(NSString *)symbol;
 - (void)setSymbol:(NSString *)symbol;

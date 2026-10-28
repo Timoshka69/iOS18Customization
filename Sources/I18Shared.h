@@ -91,6 +91,10 @@ void I18ReprocessAllContents(BOOL animated);
 /// place. Cheap; used whenever SpringBoard re-lays out an icon.
 void I18VerifyLayerTree(CALayer *root);
 
+/// Pictures without a plate are left as they are in Dark - except the few
+/// apps marked here (Maps), whose picture is darkened instead.
+void I18SetLayerBusyDark(CALayer *layer, BOOL busyDark);
+
 /// The resolved look used by the layer subclass (kept in a plain global so it
 /// can be read from any thread).
 I18Look I18CurrentLook(void);

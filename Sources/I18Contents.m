@@ -51,7 +51,7 @@ static id I18SourceContents(id contents) {
     return source ?: contents;
 }
 
-static id I18ConvertedImage(id source, I18Look look, BOOL clockFace) {
+static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDark) {
     if (look == I18LookStock || !I18IsCGImage(source)) return source;
 
     CGImageRef image = (__bridge CGImageRef)source;
@@ -65,7 +65,7 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace) {
         gImageCache.countLimit = 900;
     });
     BOOL tinted = look == I18LookTinted;
-    NSString *key = [NSString stringWithFormat:@"%p:%d:%d", image, tinted, clockFace];
+    NSString *key = [NSString stringWithFormat:@"%p:%d:%d:%d", image, tinted, clockFace, busyDark];
     id cached = [gImageCache objectForKey:key];
     if ([cached isKindOfClass:[NSArray class]]) return source; // known to need no change
     if (cached) return cached;
@@ -81,11 +81,15 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace) {
     uint8_t *pixels = CGBitmapContextGetData(context);
     int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
 
-    int flags = (clockFace ? I18FXFlagClock : 0) | (tinted ? I18FXFlagStrongDim : 0);
+    int flags = (clockFace ? I18FXFlagClock : 0) | (tinted ? I18FXFlagStrongDim : 0) | (busyDark ? I18FXFlagBusyDark : 0);
     I18FXResult result = I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
     if (tinted) {
-        I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
-    } else if (result == I18FXUntouched) {
+        // Icons with a plate: dark plate, glyph in the tint. Pictures without
+        // one: only recoloured (still a dark tile), never cut apart.
+        if (result == I18FXUnsupported) I18FXMakeTintReadyArt(pixels, (int)width, (int)height, bytesPerRow);
+        else I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
+    } else if (result == I18FXUntouched || result == I18FXUnsupported) {
+        // Dark look: an icon without a clean plate stays exactly as it is.
         CGContextRelease(context);
         // Keep the source alive together with the entry (see below).
         [gImageCache setObject:@[source] forKey:key];
@@ -116,10 +120,21 @@ static Class I18UnmanagedSuperclass(id object) {
     return cls ? class_getSuperclass(cls) : [CALayer class];
 }
 
+static const void *kBusyDarkKey = &kBusyDarkKey;
+
+void I18SetLayerBusyDark(CALayer *layer, BOOL busyDark) {
+    if (!layer) return;
+    BOOL current = [objc_getAssociatedObject(layer, kBusyDarkKey) boolValue];
+    if (current == busyDark) return;
+    objc_setAssociatedObject(layer, kBusyDarkKey, busyDark ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 static id I18DisplayContentsForLayer(CALayer *layer, id original) {
     if (!I18IsCGImage(original)) return original;
     BOOL clockFace = [objc_getAssociatedObject(layer, kClockFaceKey) boolValue];
-    return I18ConvertedImage(original, gCurrentLook, clockFace);
+    BOOL busyDark = [objc_getAssociatedObject(layer, kBusyDarkKey) boolValue] ||
+                    (layer.superlayer && [objc_getAssociatedObject(layer.superlayer, kBusyDarkKey) boolValue]);
+    return I18ConvertedImage(original, gCurrentLook, clockFace, busyDark);
 }
 
 static void I18Managed_setContents(CALayer *self, SEL _cmd, id contents) {

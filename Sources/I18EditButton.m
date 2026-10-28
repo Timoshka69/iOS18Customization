@@ -2,19 +2,19 @@
 //  I18EditButton.m
 //  iOS18Customization
 //
-//  The stock "+" button of jiggle mode stays exactly where and how it is.
-//  Tapping it now opens a small menu, like the "Edit" menu of iOS 18:
+//  Like iOS 18, the "+" of jiggle mode is replaced by a bold "Edit" pill
+//  (styled after SpringBoard's own "Done" pill and mirrored to the other
+//  side). Tapping it opens a small menu:
 //
 //      Add Widget   -> runs the stock "+" action (widget gallery)
 //      Customize    -> opens the customization panel
 //
-//  A transparent tap area is laid over the "+" for that; the menu opens on a
-//  single tap.
+//  The stock "+" stays in the hierarchy (invisible), so its action and its
+//  appear / disappear animations keep working; the pill follows them.
 //
 
 #import "I18Shared.h"
 
-static const void *kOverlayKey = &kOverlayKey;
 static const void *kHostRefKey = &kHostRefKey;
 static const void *kLastSearchKey = &kLastSearchKey;
 
@@ -54,7 +54,7 @@ static BOOL I18FireGestures(UIView *view) {
 
 static BOOL I18FireStockAction(UIView *view, int depth) {
     if (!view || depth > 3) return NO;
-    if ([view isKindOfClass:[UIControl class]] && !I18ClassNameContains(view, @"I18MenuOverlay")) {
+    if ([view isKindOfClass:[UIControl class]] && !I18ClassNameContains(view, @"I18EditPill")) {
         UIControl *control = (UIControl *)view;
         if (I18ControlHasActions(control, UIControlEventTouchUpInside)) {
             [control sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -100,7 +100,7 @@ static void I18AddWidget(UIView *stock) {
 /// because SpringBoard's own gestures swallow the short tap).
 @interface I18PlusMenu : NSObject
 + (instancetype)shared;
-- (void)showBelowView:(UIView *)anchor;
+- (void)showBelowView:(UIView *)anchor stock:(nullable UIView *)stock;
 - (void)dismiss;
 - (void)dismissAnimated:(BOOL)animated;
 @end
@@ -191,7 +191,7 @@ static void I18AddWidget(UIView *stock) {
     return menu;
 }
 
-- (void)showBelowView:(UIView *)anchor {
+- (void)showBelowView:(UIView *)anchor stock:(UIView *)stock {
     UIWindow *home = anchor.window;
     UIWindowScene *scene = home.windowScene;
     if (!home || !scene) return;
@@ -228,7 +228,7 @@ static void I18AddWidget(UIView *stock) {
     [_card addSubview:material];
 
     __weak I18PlusMenu *weakSelf = self;
-    __weak UIView *weakAnchor = anchor;
+    __weak UIView *weakAnchor = stock ?: anchor;
     I18PlusMenuRow *addWidget = [[I18PlusMenuRow alloc] initWithTitle:I18L(@"AddWidget") symbol:@"plus.square.on.square"];
     addWidget.frame = CGRectMake(0, 0, width, rowHeight);
     addWidget.action = ^{
@@ -297,42 +297,78 @@ static void I18AddWidget(UIView *stock) {
 }
 @end
 
-#pragma mark - Transparent tap area over the "+"
+#pragma mark - The "Edit" pill
 
-@interface I18MenuOverlay : UIView <UIGestureRecognizerDelegate>
-- (instancetype)initWithHost:(UIView *)host;
+@interface I18EditPill : UIControl
+- (void)adoptStyleFrom:(nullable UIView *)done;
 @end
 
-@implementation I18MenuOverlay {
-    __weak UIView *_host;
+static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
+    if (!view || depth > 5) return nil;
+    if ([view isKindOfClass:cls]) return view;
+    for (UIView *sub in view.subviews) {
+        UIView *found = I18FirstSubviewOfClass(sub, cls, depth + 1);
+        if (found) return found;
+    }
+    return nil;
 }
 
-- (instancetype)initWithHost:(UIView *)host {
-    if ((self = [super initWithFrame:host.bounds])) {
-        _host = host;
-        self.backgroundColor = UIColor.clearColor;
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        self.accessibilityLabel = host.accessibilityLabel;
-        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)];
-        tap.delegate = self;
-        [self addGestureRecognizer:tap];
+@implementation I18EditPill {
+    UIVisualEffectView *_material;
+    UILabel *_label;
+    __weak UIView *_styledFrom;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        _material = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
+        _material.userInteractionEnabled = NO;
+        _material.clipsToBounds = YES;
+        [self addSubview:_material];
+
+        _label = [[UILabel alloc] init];
+        _label.text = I18L(@"Edit");
+        _label.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightBold];
+        _label.textColor = UIColor.labelColor;
+        _label.textAlignment = NSTextAlignmentCenter;
+        _label.userInteractionEnabled = NO;
+        [_material.contentView addSubview:_label];
+        self.accessibilityLabel = _label.text;
+        self.accessibilityTraits = UIAccessibilityTraitButton;
     }
     return self;
 }
 
-- (void)tapped {
-    UIView *anchor = _host ?: self;
-    [[I18PlusMenu shared] showBelowView:anchor];
+/// Same material, height and text colour as SpringBoard's "Done" pill, but
+/// a bold title (iOS 18).
+- (void)adoptStyleFrom:(UIView *)done {
+    if (!done || done == _styledFrom) return;
+    _styledFrom = done;
+    UIVisualEffectView *material = (UIVisualEffectView *)I18FirstSubviewOfClass(done, [UIVisualEffectView class], 0);
+    if (material.effect) _material.effect = material.effect;
+    UILabel *label = (UILabel *)I18FirstSubviewOfClass(done, [UILabel class], 0);
+    if (label.font) _label.font = [UIFont systemFontOfSize:label.font.pointSize weight:UIFontWeightBold];
+    if (label.textColor) _label.textColor = label.textColor;
+    [self setNeedsLayout];
 }
 
-// SpringBoard has its own tap and long-press recognizers on the home screen.
-// Ours has to win on the "+", so the others wait for it to fail.
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
-    return YES;
+- (CGSize)sizeThatFits:(CGSize)size {
+    CGSize text = [_label sizeThatFits:CGSizeMake(300.0, 100.0)];
+    return CGSizeMake(ceil(text.width) + 30.0, MAX(28.0, ceil(text.height) + 12.0));
 }
 
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
-    return NO;
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    _material.frame = self.bounds;
+    _material.layer.cornerRadius = self.bounds.size.height * 0.5;
+    _label.frame = _material.contentView.bounds;
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+    [super setHighlighted:highlighted];
+    [UIView animateWithDuration:highlighted ? 0.08 : 0.25 animations:^{
+        self->_material.alpha = highlighted ? 0.55 : 1.0;
+    }];
 }
 @end
 
@@ -349,7 +385,7 @@ static NSArray<NSString *> *I18ActionNames(UIControl *control) {
 }
 
 static BOOL I18IsOurs(UIView *view) {
-    return I18ClassNameContains(view, @"I18MenuOverlay") || I18ClassNameContains(view, @"I18Panel");
+    return I18ClassNameContains(view, @"I18EditPill") || I18ClassNameContains(view, @"I18Panel");
 }
 
 /// SpringBoard's own class names for the "+" (iOS 14 - 16).
@@ -416,7 +452,34 @@ static UIView *I18FindWidgetButton(UIView *root) {
     return nil;
 }
 
-#pragma mark - Keeping the overlay on top
+#pragma mark - SpringBoard's "Done" pill
+
+/// The "Done" pill in the top right corner of jiggle mode.
+static BOOL I18IsDoneButton(UIView *view, UIWindow *window) {
+    if (I18IsOurs(view) || view.hidden || view.alpha < 0.01) return NO;
+    if (![view isKindOfClass:[UIControl class]] && !I18ClassNameContains(view, @"Button")) return NO;
+    if (I18HasWidgetButtonName(view)) return NO;
+    CGRect frame = [view convertRect:view.bounds toView:window];
+    CGFloat width = window.bounds.size.width;
+    return frame.size.width >= 40.0 && frame.size.width <= 160.0 && frame.size.height >= 20.0 && frame.size.height <= 50.0 &&
+           CGRectGetMinY(frame) < 90.0 && CGRectGetMinX(frame) > width * 0.55 && CGRectGetMaxX(frame) <= width + 0.5;
+}
+
+static UIView *I18SearchDone(UIView *root, UIWindow *window, int depth) {
+    if (!root || depth > 9) return nil;
+    for (UIView *sub in root.subviews) {
+        if (I18IsOurs(sub) || I18ClassNameContains(sub, @"IconListView") || I18ClassNameContains(sub, @"SBIconView")) continue;
+        if (I18IsDoneButton(sub, window)) return sub;
+        UIView *found = I18SearchDone(sub, window, depth + 1);
+        if (found) return found;
+    }
+    return nil;
+}
+
+#pragma mark - The "+" as host of the pill
+
+static const void *kPillKey = &kPillKey;
+static const void *kDoneRefKey = &kDoneRefKey;
 
 static BOOL I18IsHostClass(Class cls) {
     return cls && strncmp(class_getName(cls), "I18PlusHost_", 12) == 0;
@@ -428,23 +491,86 @@ static Class I18HostSuperclass(id object) {
     return cls ? class_getSuperclass(cls) : [UIView class];
 }
 
-static void I18LayoutOverlay(UIView *host) {
-    UIView *overlay = objc_getAssociatedObject(host, kOverlayKey);
-    if (!overlay) return;
-    if (!CGRectEqualToRect(overlay.frame, host.bounds)) overlay.frame = host.bounds;
-    if (host.subviews.lastObject != overlay) [host bringSubviewToFront:overlay];
+static UIView *I18DoneFor(UIView *host) {
+    I18WeakBox *box = objc_getAssociatedObject(host, kDoneRefKey);
+    UIView *done = box.object;
+    if (done && done.window && done.window == host.window) return done;
+    // Not found yet: look again at most twice a second.
+    NSNumber *last = objc_getAssociatedObject(host, kLastSearchKey);
+    CFTimeInterval now = CACurrentMediaTime();
+    if (box && last && now - last.doubleValue < 0.5) return nil;
+    objc_setAssociatedObject(host, kLastSearchKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIWindow *window = host.window;
+    done = window ? I18SearchDone(window, window, 0) : nil;
+    box = [[I18WeakBox alloc] init];
+    box.object = done;
+    objc_setAssociatedObject(host, kDoneRefKey, box, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return done;
+}
+
+/// Puts the pill where iOS 18 has it: mirrored to the "Done" pill (same
+/// height, same distance from the edge), else where the "+" is.
+static void I18LayoutPill(UIView *host) {
+    I18EditPill *pill = objc_getAssociatedObject(host, kPillKey);
+    UIView *container = host.superview;
+    if (!pill || !container) return;
+    if (pill.superview != container) [container addSubview:pill];
+    else if (container.subviews.lastObject != pill) [container bringSubviewToFront:pill];
+
+    // The stock "+" stays (its action and animations are SpringBoard's),
+    // it is just not drawn.
+    if (!host.maskView) host.maskView = [[UIView alloc] initWithFrame:CGRectZero];
+
+    UIView *done = I18DoneFor(host);
+    [pill adoptStyleFrom:done];
+    CGSize size = [pill sizeThatFits:CGSizeZero];
+    CGPoint center;
+    UIWindow *window = host.window;
+    if (done && window) {
+        CGRect doneFrame = [done convertRect:done.bounds toView:nil];
+        size.height = doneFrame.size.height;
+        CGFloat margin = window.bounds.size.width - CGRectGetMaxX(doneFrame);
+        CGPoint inWindow = CGPointMake(margin + size.width * 0.5, CGRectGetMidY(doneFrame));
+        center = [container convertPoint:inWindow fromView:nil];
+    } else {
+        CGRect frame = host.frame;
+        center = CGPointMake(CGRectGetMinX(frame) + size.width * 0.5, CGRectGetMidY(frame));
+    }
+    CGRect bounds = CGRectMake(0, 0, size.width, size.height);
+    if (!CGRectEqualToRect(pill.bounds, bounds)) pill.bounds = bounds;
+    if (fabs(pill.center.x - center.x) > 0.25 || fabs(pill.center.y - center.y) > 0.25) pill.center = center;
+    pill.alpha = host.alpha;
+    pill.hidden = host.hidden;
 }
 
 static void I18Host_layoutSubviews(UIView *self, SEL _cmd) {
     struct objc_super sup = {self, I18HostSuperclass(self)};
     ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
-    I18LayoutOverlay(self);
+    I18LayoutPill(self);
 }
 
-static void I18Host_didAddSubview(UIView *self, SEL _cmd, UIView *subview) {
+// SpringBoard fades the "+" in and out with jiggle mode: the pill does the
+// same, inside the same animation.
+static void I18Host_setAlpha(UIView *self, SEL _cmd, CGFloat alpha) {
     struct objc_super sup = {self, I18HostSuperclass(self)};
-    ((void (*)(struct objc_super *, SEL, UIView *))objc_msgSendSuper)(&sup, _cmd, subview);
-    if (![subview isKindOfClass:[I18MenuOverlay class]]) I18LayoutOverlay(self);
+    ((void (*)(struct objc_super *, SEL, CGFloat))objc_msgSendSuper)(&sup, _cmd, alpha);
+    UIView *pill = objc_getAssociatedObject(self, kPillKey);
+    pill.alpha = alpha;
+}
+
+static void I18Host_setHidden(UIView *self, SEL _cmd, BOOL hidden) {
+    struct objc_super sup = {self, I18HostSuperclass(self)};
+    ((void (*)(struct objc_super *, SEL, BOOL))objc_msgSendSuper)(&sup, _cmd, hidden);
+    UIView *pill = objc_getAssociatedObject(self, kPillKey);
+    pill.hidden = hidden;
+}
+
+static void I18Host_didMoveToSuperview(UIView *self, SEL _cmd) {
+    struct objc_super sup = {self, I18HostSuperclass(self)};
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    UIView *pill = objc_getAssociatedObject(self, kPillKey);
+    if (!self.superview) [pill removeFromSuperview];
+    else I18LayoutPill(self);
 }
 
 static Class I18Host_class(id self, SEL _cmd) {
@@ -458,28 +584,65 @@ static Class I18HostClassFor(Class base) {
     host = objc_allocateClassPair(base, name.UTF8String, 0);
     if (!host) return Nil;
     class_addMethod(host, @selector(layoutSubviews), (IMP)I18Host_layoutSubviews, "v@:");
-    class_addMethod(host, @selector(didAddSubview:), (IMP)I18Host_didAddSubview, "v@:@");
+    class_addMethod(host, @selector(setAlpha:), (IMP)I18Host_setAlpha, "v@:d");
+    class_addMethod(host, @selector(setHidden:), (IMP)I18Host_setHidden, "v@:B");
+    class_addMethod(host, @selector(didMoveToSuperview), (IMP)I18Host_didMoveToSuperview, "v@:");
     class_addMethod(host, @selector(class), (IMP)I18Host_class, "#@:");
     objc_registerClassPair(host);
     return host;
 }
 
-static void I18AttachMenu(UIView *host) {
-    // Blur views only accept subviews in their content view.
-    if ([host isKindOfClass:[UIVisualEffectView class]]) host = ((UIVisualEffectView *)host).contentView;
-    if (objc_getAssociatedObject(host, kOverlayKey)) {
-        I18LayoutOverlay(host);
-        return;
+@interface I18PillTarget : NSObject
+@property (nonatomic, weak) UIView *pill;
+@property (nonatomic, weak) UIView *host;
+- (void)tapped;
+@end
+
+@implementation I18PillTarget
+- (void)tapped {
+    if (self.pill) [[I18PlusMenu shared] showBelowView:self.pill stock:self.host];
+}
+@end
+
+static const void *kPillTargetKey = &kPillTargetKey;
+
+/// The whole "+" (its blur circle included): the found view and its parents
+/// of the same size.
+static UIView *I18VisualPlus(UIView *found) {
+    UIView *host = found;
+    for (int level = 0; level < 3; level++) {
+        UIView *parent = host.superview;
+        if (!parent || parent.subviews.count > 3) break;
+        CGSize a = host.bounds.size, b = parent.bounds.size;
+        if (fabs(a.width - b.width) > 3.0 || fabs(a.height - b.height) > 3.0) break;
+        host = parent;
     }
+    return host;
+}
+
+static void I18AttachPill(UIView *host) {
+    // Blur views take subviews only in their content view; the pill goes
+    // next to the "+" anyway, so the outer view is the host.
     if (I18ClassNameContains(host, @"NSKVONotifying_")) return;
-    I18MenuOverlay *overlay = [[I18MenuOverlay alloc] initWithHost:host];
-    objc_setAssociatedObject(host, kOverlayKey, overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [host addSubview:overlay];
+    I18EditPill *pill = objc_getAssociatedObject(host, kPillKey);
+    if (!pill) {
+        pill = [[I18EditPill alloc] initWithFrame:CGRectZero];
+        I18PillTarget *target = [[I18PillTarget alloc] init];
+        target.pill = pill;
+        target.host = host;
+        objc_setAssociatedObject(pill, kPillTargetKey, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [pill addTarget:target action:@selector(tapped) forControlEvents:UIControlEventTouchUpInside];
+        objc_setAssociatedObject(host, kPillKey, pill, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     if (!I18IsHostClass(object_getClass(host))) {
         Class hostClass = I18HostClassFor(object_getClass(host));
         if (hostClass) object_setClass(host, hostClass);
     }
-    I18LayoutOverlay(host);
+    I18LayoutPill(host);
+}
+
+static UIView *I18PillOfHost(UIView *host) {
+    return host ? objc_getAssociatedObject(host, kPillKey) : nil;
 }
 
 #pragma mark - Entry point
@@ -507,9 +670,8 @@ static IMP oC_sendAction;
 /// area is on top of it, the menu is shown instead of the widget gallery.
 static void hC_sendAction(UIControl *self, SEL _cmd, SEL action, id target, UIEvent *event) {
     if (!gFiringStock && I18IsStockPlus(self, action)) {
-        UIView *anchor = self;
-        if (I18HasWidgetButtonName(self.superview) && !I18HasWidgetButtonName(self)) anchor = self.superview;
-        [[I18PlusMenu shared] showBelowView:anchor];
+        UIView *anchor = I18PillOfHost(self) ?: I18PillOfHost(self.superview) ?: I18PillOfHost(self.superview.superview) ?: self;
+        [[I18PlusMenu shared] showBelowView:anchor stock:self];
         return;
     }
     ((void (*)(id, SEL, SEL, id, UIEvent *))oC_sendAction)(self, _cmd, action, target, event);
@@ -564,5 +726,5 @@ void I18SyncEditButton(UIView *root) {
             }
         }
     }
-    if (host) I18AttachMenu(host);
+    if (host) I18AttachPill(I18VisualPlus(host));
 }

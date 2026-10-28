@@ -61,12 +61,13 @@ static UIImage *I18SettingsIconForLook(UIImage *source, I18Look look) {
     BOOL tinted = look == I18LookTinted;
     I18FXResult result = I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, tinted ? I18FXFlagStrongDim : 0);
     if (tinted) {
-        I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
+        if (result == I18FXUnsupported) I18FXMakeTintReadyArt(pixels, (int)width, (int)height, bytesPerRow);
+        else I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
         float rgb[3];
         [[I18Settings shared] tintRGB:rgb];
         I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
         I18FXApplyMatrix(pixels, (int)width, (int)height, bytesPerRow, &matrix);
-    } else if (result == I18FXUntouched) {
+    } else if (result == I18FXUntouched || result == I18FXUnsupported) {
         CGContextRelease(context);
         [gIconCache setObject:@[source] forKey:key];
         return source;

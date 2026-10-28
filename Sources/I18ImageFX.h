@@ -21,7 +21,8 @@ extern "C" {
 typedef enum {
     I18FXUntouched = 0,   ///< image was left as is (already dark, too small, not an icon)
     I18FXConverted = 1,   ///< background was replaced, glyph kept / recoloured
-    I18FXDimmed    = 2,   ///< busy artwork, only dimmed
+    I18FXDimmed    = 2,   ///< busy artwork, darkened (only with I18FXFlagBusyDark)
+    I18FXUnsupported = 3, ///< no clean plate: left as is, it would only get spoilt
 } I18FXResult;
 
 /// Turns a light app icon into an iOS 18 style "dark" icon in place.
@@ -32,17 +33,22 @@ I18FXResult I18FXMakeDark(uint8_t *px, int width, int height, int bytesPerRow);
 /// Same as above. Pass I18FXFlagClock for the face of the live Clock icon:
 /// the dial is flipped (white dial -> dark dial, dark numerals -> white).
 #define I18FXFlagClock 1
-/// Busy artwork that cannot be converted is dimmed harder (used for Tinted).
+/// The conversion is for Tinted.
 #define I18FXFlagStrongDim 2
 /// Replace only the plate and keep the glyph colours (used for the Weather
 /// previews of the panel: white cloud and yellow sun on a dark plate).
 #define I18FXFlagKeepGlyph 4
+/// Artwork without a plate (Maps) is darkened instead of left alone.
+#define I18FXFlagBusyDark 8
 I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytesPerRow, int flags);
 
 /// Converts an already dark icon to grey levels that keep saturated glyphs
 /// bright. Used as the contents of tinted icons (the tint itself is a cheap
 /// colour matrix on top, so the sliders update instantly).
 void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow);
+/// For icons without a plate (I18FXUnsupported): brightness only, kept in
+/// the darker part of the range.
+void I18FXMakeTintReadyArt(uint8_t *px, int width, int height, int bytesPerRow);
 
 /// 4x5 colour matrix, rows are R, G, B, A; columns are r, g, b, a, offset.
 /// Same layout as CAColorMatrix.
