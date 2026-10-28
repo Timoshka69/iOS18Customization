@@ -642,7 +642,7 @@ static I18FXResult fx_dark_region_core(uint8_t *px, int bpr, int x0, int y0, int
                 // glyph gets the brightness of a typical glyph (so it shows
                 // the tint itself, not a washed out version), with a little
                 // of its own shading kept for the details.
-                float glyphGrey = 0.42f + 0.22f * fx_luma(f);
+                float glyphGrey = 0.50f + 0.22f * fx_luma(f);
                 float v = darkV * (1.0f - m) + glyphGrey * m;
                 o[0] = o[1] = o[2] = v;
             } else if (flags & I18FXFlagStrongDim) {
@@ -875,6 +875,27 @@ static void fx_tint_art_region(uint8_t *px, int bpr, int x0, int y0, int w, int 
     }
 }
 
+void I18FXMakeTintGrey(uint8_t *px, int width, int height, int bytesPerRow) {
+    // Brightness for the tint matrix. Luma alone makes red and purple
+    // glyphs (Health, Pinterest, Podcasts) nearly black, so the brightest
+    // channel counts as much as luma: a vivid colour reads as bright, like
+    // it does in iOS 18.
+    for (int y = 0; y < height; y++) {
+        uint8_t *row = px + (size_t)y * bytesPerRow;
+        for (int x = 0; x < width; x++) {
+            uint8_t *p = row + x * 4;
+            float c[3];
+            float a = fx_load(p, c);
+            if (a <= 0.0f) continue;
+            float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
+            float luma = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+            float g = 0.45f * mx + 0.55f * luma;
+            float o[3] = {g, g, g};
+            fx_store(p, o, a);
+        }
+    }
+}
+
 void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow) {
     fx_tint_ready_region(px, bytesPerRow, 0, 0, width, height);
 }
@@ -941,13 +962,15 @@ static I18FXMatrix fx_tint_ramp(const float tint[3], float plateLuma, float glyp
 }
 
 I18FXMatrix I18FXIconTintMatrix(const float rgb[3]) {
-    return fx_tint_ramp(rgb, 0.10f, 0.62f, 0.10f);
+    // Input are the grey levels of I18FXMakeTintGrey: a typical glyph is
+    // about 0.7 there, the plate about 0.1-0.2.
+    return fx_tint_ramp(rgb, 0.10f, 0.72f, 0.10f);
 }
 
 I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
     // Widgets that stay light (Weather: a sky picture behind white text):
     // the picture turns near-black, only the text takes the tint.
-    if (lightContent) return fx_tint_ramp(rgb, 0.62f, 0.95f, 0.10f);
+    if (lightContent) return fx_tint_ramp(rgb, 0.40f, 0.90f, 0.10f);
     return fx_tint_ramp(rgb, 0.10f, 0.62f, 0.10f);
 }
 

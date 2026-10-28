@@ -66,6 +66,7 @@ static UIImage *I18SettingsIconForLook(UIImage *source, I18Look look) {
         float rgb[3];
         [[I18Settings shared] tintRGB:rgb];
         I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
+        I18FXMakeTintGrey(pixels, (int)width, (int)height, bytesPerRow);
         I18FXApplyMatrix(pixels, (int)width, (int)height, bytesPerRow, &matrix);
     } else if (result == I18FXUntouched || result == I18FXUnsupported) {
         CGContextRelease(context);

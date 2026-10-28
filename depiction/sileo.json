@@ -24,7 +24,7 @@
         {
           "class": "DepictionTableTextView",
           "title": "Версия",
-          "text": "1.8.0"
+          "text": "1.9.0"
         },
         {
           "class": "DepictionTableTextView",
@@ -62,6 +62,15 @@
       "tabname": "Изменения",
       "class": "DepictionStackView",
       "views": [
+        {
+          "class": "DepictionSubheaderView",
+          "title": "1.9.0",
+          "useBoldText": true
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- Красные и фиолетовые значки в «Цвете» больше не чёрные\n- Бейджи не белеют\n- Погода не уходит в черноту\n- Плавнее переключение «Малые / Крупные»"
+        },
         {
           "class": "DepictionSubheaderView",
           "title": "1.8.0",

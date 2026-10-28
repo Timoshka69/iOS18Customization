@@ -177,9 +177,10 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
     // A pack icon already is the dark icon (Tinted colourises it as it is).
     I18FXResult result = pack ? I18FXConverted : I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
     if (tinted) {
-        // The dark icon (or, for a picture without a plate, a dark tile) is
-        // coloured on screen by the colour matrix.
+        // The dark icon (or the picture itself) as grey levels; the colour
+        // matrix on screen turns them into the tint.
         (void)result;
+        I18FXMakeTintGrey(pixels, (int)width, (int)height, bytesPerRow);
     } else if (result == I18FXUntouched || result == I18FXUnsupported) {
         // Dark look: an icon without a clean plate stays exactly as it is.
         CGContextRelease(context);
@@ -462,7 +463,13 @@ void I18TintBadgeColor(float rgb[3]) {
     [[I18Settings shared] tintRGB:tint];
     float h, s, v;
     I18FXRGBToHSV(tint, &h, &s, &v);
-    I18FXHSVToRGB(h, MIN(s, 0.85f), MAX(v, 0.82f), rgb);
+    // A plate dark enough for the white number to stay readable, whatever
+    // the tint (a light or grey tint made the whole badge white).
+    if (s < 0.05f) {
+        rgb[0] = rgb[1] = rgb[2] = 0.42f;
+        return;
+    }
+    I18FXHSVToRGB(h, MAX(MIN(s, 0.85f), 0.45f), MIN(MAX(v, 0.55f), 0.72f), rgb);
 }
 
 I18FXMatrix I18MatrixForTintKind(I18TintKind kind) {

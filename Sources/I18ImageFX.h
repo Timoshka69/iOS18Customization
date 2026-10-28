@@ -49,6 +49,8 @@ I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytes
 /// bright. Used as the contents of tinted icons (the tint itself is a cheap
 /// colour matrix on top, so the sliders update instantly).
 void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow);
+/// Grey levels for the tint matrix from a (dark) colour icon.
+void I18FXMakeTintGrey(uint8_t *px, int width, int height, int bytesPerRow);
 /// For icons without a plate (I18FXUnsupported): brightness only, kept in
 /// the darker part of the range.
 void I18FXMakeTintReadyArt(uint8_t *px, int width, int height, int bytesPerRow);

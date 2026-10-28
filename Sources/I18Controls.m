@@ -386,6 +386,7 @@ static UIImage *I18ProcessIcon(UIImage *source, I18PreviewKind kind, const float
         // Same as the icons: the dark icon, coloured by the tint matrix.
         if (tintRGB) {
             I18FXMatrix matrix = I18FXIconTintMatrix(tintRGB);
+            I18FXMakeTintGrey(pixels, (int)width, (int)height, bytesPerRow);
             I18FXApplyMatrix(pixels, (int)width, (int)height, bytesPerRow, &matrix);
         }
     }

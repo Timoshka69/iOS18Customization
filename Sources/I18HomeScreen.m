@@ -300,19 +300,16 @@ static void I18ApplyGeometry(UIView *view, I18Geometry *geometry, CGFloat scale)
         gTypicalIconWidth = geometry.size.width;
     }
 
+    // Once an icon has been large, its picture always fills the bounds:
+    // switching the gravity back at the start of the shrink animation made
+    // the picture jump to its small size before the frame got there.
     CALayer *layer = view.layer;
-    if (scale > 1.001) {
-        layer.minificationFilter = kCAFilterTrilinear;
+    if (scale > 1.001 || objc_getAssociatedObject(layer, kOriginalGravityKey)) {
         if (!objc_getAssociatedObject(layer, kOriginalGravityKey)) {
             objc_setAssociatedObject(layer, kOriginalGravityKey, layer.contentsGravity ?: kCAGravityResize, OBJC_ASSOCIATION_COPY_NONATOMIC);
         }
-        layer.contentsGravity = kCAGravityResize;
-    } else {
-        NSString *gravity = objc_getAssociatedObject(layer, kOriginalGravityKey);
-        if (gravity) {
-            layer.contentsGravity = gravity;
-            objc_setAssociatedObject(layer, kOriginalGravityKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        }
+        layer.minificationFilter = kCAFilterTrilinear;
+        if (![layer.contentsGravity isEqualToString:kCAGravityResize]) layer.contentsGravity = kCAGravityResize;
     }
 }
 
@@ -468,10 +465,10 @@ static void I18ApplyWidgetScale(UIView *iconView, BOOL large, BOOL animated) {
     [CATransaction setDisableActions:YES];
     if (animated && iconView.window) {
         CASpringAnimation *spring = [CASpringAnimation animationWithKeyPath:@"sublayerTransform"];
-        // Same curve as the UIView spring the icons use (0.5 s, damping 0.82),
-        // so widgets and icons grow together.
-        spring.damping = 20.6;
-        spring.stiffness = 158.0;
+        // Same curve as the UIView spring the icons use (0.62 s, damping
+        // 0.92), so widgets and icons grow together.
+        spring.damping = 18.6;
+        spring.stiffness = 102.7;
         spring.mass = 1.0;
         spring.fromValue = [NSValue valueWithCATransform3D:(layer.presentationLayer ?: layer).sublayerTransform];
         spring.toValue = [NSValue valueWithCATransform3D:target];
@@ -770,7 +767,7 @@ static BOOL I18ApplyNativeLabel(UIView *iconView, BOOL animated) {
     NSArray<UIView *> *labels = I18LabelsOf(iconView);
     if (want) {
         // Fade out, then hide.
-        [UIView animateWithDuration:0.22 animations:^{
+        [UIView animateWithDuration:0.30 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
             for (UIView *label in labels) label.alpha = 0.0;
         } completion:^(__unused BOOL finished) {
             ((void (*)(id, SEL, BOOL))oV_setLabelHidden)(iconView, sel, I18WantsLabelHidden(iconView) ||
@@ -781,9 +778,9 @@ static BOOL I18ApplyNativeLabel(UIView *iconView, BOOL animated) {
         ((void (*)(id, SEL, BOOL))oV_setLabelHidden)(iconView, sel, NO);
         NSArray<UIView *> *shown = I18LabelsOf(iconView);
         for (UIView *label in shown) label.alpha = 0.0;
-        [UIView animateWithDuration:0.28 animations:^{
+        [UIView animateWithDuration:0.40 delay:0.12 options:UIViewAnimationOptionCurveEaseInOut animations:^{
             for (UIView *label in shown) label.alpha = 1.0;
-        }];
+        } completion:nil];
     }
     return YES;
 }
@@ -941,9 +938,10 @@ void I18ApplyIconSize(BOOL animated) {
         changes();
         return;
     }
-    [UIView animateWithDuration:0.5
+    // iOS 18 grows and shrinks the icons with a soft, unhurried spring.
+    [UIView animateWithDuration:0.62
                           delay:0.0
-         usingSpringWithDamping:0.82
+         usingSpringWithDamping:0.92
           initialSpringVelocity:0.0
                         options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
                      animations:changes
