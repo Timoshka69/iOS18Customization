@@ -151,8 +151,30 @@ static BOOL I18IsChrome(UIView *view) {
 /// stay as they are, so they match the frame SpringBoard animates them in.
 static BOOL I18ComputeLargeEligible(UIView *iconView) {
     BOOL widget = I18IsWidgetIconView(iconView);
+    // An icon that is being dragged (or its drag preview) stays large.
+    id dragLocation = I18Call(iconView, @"location") ?: I18Call(iconView, @"iconLocation");
+    if ([dragLocation isKindOfClass:[NSString class]] && [(NSString *)dragLocation rangeOfString:@"Drag"].location != NSNotFound) return !widget || [objc_getAssociatedObject(iconView, kEligibleKey) boolValue];
+    if (I18BoolCall(iconView, @"isDragging") || I18BoolCall(iconView, @"isGrabbed")) {
+        NSNumber *previous = objc_getAssociatedObject(iconView, kEligibleKey);
+        if (previous) return previous.boolValue;
+    }
+    // Exclusions first (anywhere above), then the closest list or drag
+    // container decides.
     int depth = 0;
+    for (UIView *view = iconView.superview; view && depth < 14; view = view.superview, depth++) {
+        if (I18ClassNameContains(view, @"Library") || I18ClassNameContains(view, @"Switcher") ||
+            I18ClassNameContains(view, @"Gallery") || I18ClassNameContains(view, @"Today") ||
+            I18ClassNameContains(view, @"Spotlight")) {
+            return NO;
+        }
+    }
+    depth = 0;
     for (UIView *view = iconView.superview; view && depth < 12; view = view.superview, depth++) {
+        if (I18ClassNameContains(view, @"Drag") || I18ClassNameContains(view, @"Lift")) {
+            // A dragged icon keeps what it had on its page.
+            NSNumber *previous = objc_getAssociatedObject(iconView, kEligibleKey);
+            return previous ? previous.boolValue : !widget;
+        }
         if (I18ClassNameContains(view, @"Library") || I18ClassNameContains(view, @"Switcher") ||
             I18ClassNameContains(view, @"Floating") || I18ClassNameContains(view, @"Gallery") ||
             I18ClassNameContains(view, @"Today") || I18ClassNameContains(view, @"Spotlight")) {
@@ -807,7 +829,10 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
     for (UIView *part in I18IconViewParts(iconView, imageView)) {
         if (I18IsLabel(part)) {
             // With SpringBoard's own switch a mask from earlier is taken off.
-            I18SetLabelHidden(part, nativeLabels ? NO : large, animated);
+            // Both ways at once: SpringBoard's own switch and our mask. While
+            // an icon is dragged SpringBoard shows its label again on its own.
+            (void)nativeLabels;
+            I18SetLabelHidden(part, large, animated);
         } else if (I18IsBadge(part)) {
             I18SetTintFilter(part.layer, tinted ? I18TintBadge : I18TintNone);
             if (imageView) I18ShiftCornerView(part, imageView, YES);
@@ -1151,6 +1176,37 @@ static void hUIV_didMoveToWindow(UIImageView *self, SEL _cmd) {
     I18CheckSwitcherImageView(self, YES);
 }
 
+static IMP oUIV_setImage;
+
+/// The switcher sets the icon image after the view is on screen.
+static void hUIV_setImage(UIImageView *self, SEL _cmd, UIImage *image) {
+    ((void (*)(id, SEL, UIImage *))oUIV_setImage)(self, _cmd, image);
+    if (!image || !self.window) return;
+    if (objc_getAssociatedObject(self, kSwitcherCheckedKey)) return; // adopted: new images convert by themselves
+    CGSize size = image.size;
+    if (size.width < 16.0 || size.width > 72.0 || fabs(size.width - size.height) > 2.0) return;
+    I18CheckSwitcherImageView(self, NO);
+}
+
+static IMP oSWC_didMoveToWindow, oSWC_layoutSubviews;
+
+/// SpringBoard's own icon container in the switcher header.
+static void I18StyleSwitcherContainer(UIView *view) {
+    if (!view.window) return;
+    [gImageViews addObject:view];
+    I18StyleImageView(view);
+}
+
+static void hSWC_didMoveToWindow(UIView *self, SEL _cmd) {
+    ((void (*)(id, SEL))oSWC_didMoveToWindow)(self, _cmd);
+    I18StyleSwitcherContainer(self);
+}
+
+static void hSWC_layoutSubviews(UIView *self, SEL _cmd) {
+    ((void (*)(id, SEL))oSWC_layoutSubviews)(self, _cmd);
+    if (!I18ImageViewIsCurrent(self)) I18StyleSwitcherContainer(self);
+}
+
 #pragma mark - Hooks: SBRootFolderView
 
 static IMP oRF_layoutSubviews, oRF_setEditingAnimated;
@@ -1220,6 +1276,15 @@ void I18InstallHomeScreenHooks(void) {
     }
 
     I18HookMethod([UIImageView class], @selector(didMoveToWindow), (IMP)hUIV_didMoveToWindow, &oUIV_didMoveToWindow);
+    I18HookMethod([UIImageView class], @selector(setImage:), (IMP)hUIV_setImage, &oUIV_setImage);
+    for (NSString *name in @[@"SBFluidSwitcherIconImageContainerView", @"SBAppSwitcherIconView", @"SBFluidSwitcherItemContainerHeaderIconView"]) {
+        Class cls = objc_getClass(name.UTF8String);
+        if (!cls) continue;
+        IMP *window = &oSWC_didMoveToWindow, *layout = &oSWC_layoutSubviews;
+        if (*window) break; // one class is enough (they share the IMP slots)
+        I18HookMethod(cls, @selector(didMoveToWindow), (IMP)hSWC_didMoveToWindow, window);
+        I18HookMethod(cls, @selector(layoutSubviews), (IMP)hSWC_layoutSubviews, layout);
+    }
 
     Class rootFolderView = objc_getClass("SBRootFolderView");
     I18HookMethod(rootFolderView, @selector(layoutSubviews), (IMP)hRF_layoutSubviews, &oRF_layoutSubviews);

@@ -968,14 +968,20 @@ I18FXMatrix I18FXIconTintMatrix(const float rgb[3]) {
     // that started above black ran backwards below it and turned black
     // plates and night skies into the opposite colour (red under green,
     // green under purple) - it looked like icons kept an old colour.
-    return fx_tint_ramp(rgb, 0.0f, 0.72f, 0.085f);
+    // Plate (luma ~0.13) a deep near-black, glyph (~0.72) the tint. The
+    // ramp starts at a very dark value, so below it nothing can turn into
+    // the opposite colour.
+    return fx_tint_ramp(rgb, 0.11f, 0.74f, 0.022f);
 }
 
 I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
     // Widgets that stay light (Weather: a sky picture behind white text):
     // the picture turns near-black, only the text takes the tint.
-    if (lightContent) return fx_tint_ramp(rgb, 0.0f, 1.10f, 0.085f);
-    return fx_tint_ramp(rgb, 0.0f, 0.72f, 0.085f);
+    // Widgets draw their own (often light) background behind the content:
+    // everything up to a mid grey becomes black, only text and graphics take
+    // the tint. Starting at black, nothing can turn into the opposite colour.
+    if (lightContent) return fx_tint_ramp(rgb, 0.42f, 1.0f, 0.0f);
+    return fx_tint_ramp(rgb, 0.34f, 0.90f, 0.0f);
 }
 
 I18FXMatrix I18FXBadgeTintMatrix(const float rgb[3]) {
