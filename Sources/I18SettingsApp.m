@@ -61,8 +61,8 @@ static UIImage *I18SettingsIconForLook(UIImage *source, I18Look look) {
     BOOL tinted = look == I18LookTinted;
     I18FXResult result = I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, tinted ? I18FXFlagStrongDim : 0);
     if (tinted) {
-        if (result == I18FXUnsupported) I18FXMakeTintReadyArt(pixels, (int)width, (int)height, bytesPerRow);
-        else I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
+        // (With the Tinted flag the conversion already leaves grey levels.)
+        (void)result;
         float rgb[3];
         [[I18Settings shared] tintRGB:rgb];
         I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
@@ -143,12 +143,87 @@ static void I18RestyleAllCells(void) {
     }
 }
 
+#pragma mark - Icon pack (SettingsIcons)
+
+// Same layout as the SettingsIcons folder of Homescreen18:
+// SettingsIcons/Bundles/<bundle id of the framework>/<image name>@2x.png
+static NSArray<NSString *> *I18SettingsPackDirectories(void) {
+    static NSArray<NSString *> *directories;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableArray<NSString *> *found = [NSMutableArray array];
+        for (NSString *path in @[
+                 @"/var/jb/Library/Application Support/iOS18Customization/SettingsIcons/Bundles",
+                 @"/Library/Application Support/iOS18Customization/SettingsIcons/Bundles",
+                 @"/var/jb/Library/Application Support/homescreen18/SettingsIcons/Bundles",
+                 @"/Library/Application Support/homescreen18/SettingsIcons/Bundles",
+             ]) {
+            BOOL isDirectory = NO;
+            if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory) [found addObject:path];
+        }
+        directories = found;
+    });
+    return directories;
+}
+
+static UIImage *I18SettingsPackImage(NSString *name, NSBundle *bundle) {
+    if (![name isKindOfClass:[NSString class]] || name.length == 0 || [name containsString:@"/"]) return nil;
+    if ([I18Settings shared].look == I18LookStock) return nil;
+    NSString *bundleID = bundle.bundleIdentifier;
+    if (bundleID.length == 0) return nil;
+    NSArray<NSString *> *directories = I18SettingsPackDirectories();
+    if (directories.count == 0) return nil;
+
+    static NSCache *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        cache = [[NSCache alloc] init];
+    });
+    NSString *key = [NSString stringWithFormat:@"%@/%@", bundleID, name];
+    id cached = [cache objectForKey:key];
+    if (cached) return cached == [NSNull null] ? nil : cached;
+
+    UIImage *image = nil;
+    NSString *scaled = UIScreen.mainScreen.scale > 2.5 ? @"@3x" : @"@2x";
+    NSString *other = [scaled isEqualToString:@"@3x"] ? @"@2x" : @"@3x";
+    for (NSString *directory in directories) {
+        NSString *folder = [directory stringByAppendingPathComponent:bundleID];
+        for (NSString *file in @[[name stringByAppendingFormat:@"%@.png", scaled], [name stringByAppendingFormat:@"%@.png", other], [name stringByAppendingString:@".png"]]) {
+            image = [UIImage imageWithContentsOfFile:[folder stringByAppendingPathComponent:file]];
+            if (image) break;
+        }
+        if (image) break;
+    }
+    [cache setObject:image ?: [NSNull null] forKey:key];
+    return image;
+}
+
+static IMP oImg_namedTraits, oImg_namedConfiguration;
+
+static UIImage *hImg_namedTraits(id self, SEL _cmd, NSString *name, NSBundle *bundle, id traits) {
+    UIImage *pack = I18SettingsPackImage(name, bundle);
+    if (pack) return pack;
+    return ((UIImage * (*)(id, SEL, NSString *, NSBundle *, id))oImg_namedTraits)(self, _cmd, name, bundle, traits);
+}
+
+static UIImage *hImg_namedConfiguration(id self, SEL _cmd, NSString *name, NSBundle *bundle, id configuration) {
+    UIImage *pack = I18SettingsPackImage(name, bundle);
+    if (pack) return pack;
+    return ((UIImage * (*)(id, SEL, NSString *, NSBundle *, id))oImg_namedConfiguration)(self, _cmd, name, bundle, configuration);
+}
+
 #pragma mark - Install
 
 void I18InstallSettingsAppHooks(void) {
     Class cellClass = objc_getClass("PSTableCell");
     if (!cellClass) return;
     I18HookMethod(cellClass, @selector(layoutSubviews), (IMP)hCell_layoutSubviews, &oCell_layoutSubviews);
+
+    if (I18SettingsPackDirectories().count) {
+        Class meta = object_getClass([UIImage class]);
+        I18HookMethod(meta, NSSelectorFromString(@"imageNamed:inBundle:compatibleWithTraitCollection:"), (IMP)hImg_namedTraits, &oImg_namedTraits);
+        I18HookMethod(meta, NSSelectorFromString(@"imageNamed:inBundle:withConfiguration:"), (IMP)hImg_namedConfiguration, &oImg_namedConfiguration);
+    }
 
     // The look was changed on the home screen.
     int token = 0;

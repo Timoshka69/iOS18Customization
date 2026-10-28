@@ -299,8 +299,9 @@ static void I18AddWidget(UIView *stock) {
 
 #pragma mark - The "Edit" pill
 
-@interface I18EditPill : UIControl
+@interface I18EditPill : UIControl <UIGestureRecognizerDelegate>
 - (void)adoptStyleFrom:(nullable UIView *)done;
+@property (nonatomic, copy, nullable) void (^onTap)(void);
 @end
 
 static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
@@ -326,9 +327,17 @@ static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
         _material.clipsToBounds = YES;
         [self addSubview:_material];
 
+        // A plain tap must open the menu at once. SpringBoard's own
+        // recognizers on the home screen (tap to leave jiggle mode, long
+        // press) would otherwise take the touch first, so they wait for this
+        // one to fail.
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)];
+        tap.delegate = self;
+        [self addGestureRecognizer:tap];
+
         _label = [[UILabel alloc] init];
         _label.text = I18L(@"Edit");
-        _label.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightBold];
+        _label.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightBold];
         _label.textColor = UIColor.labelColor;
         _label.textAlignment = NSTextAlignmentCenter;
         _label.userInteractionEnabled = NO;
@@ -339,22 +348,36 @@ static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
     return self;
 }
 
-/// Same material, height and text colour as SpringBoard's "Done" pill, but
-/// a bold title (iOS 18).
+- (void)tapped {
+    if (self.onTap) self.onTap();
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
+    return YES;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+    return NO;
+}
+
+/// Same material and text colour as SpringBoard's "Done" pill, but a bold
+/// title (iOS 18). Its size is not copied: the pill keeps its own compact one.
 - (void)adoptStyleFrom:(UIView *)done {
     if (!done || done == _styledFrom) return;
     _styledFrom = done;
     UIVisualEffectView *material = (UIVisualEffectView *)I18FirstSubviewOfClass(done, [UIVisualEffectView class], 0);
     if (material.effect) _material.effect = material.effect;
     UILabel *label = (UILabel *)I18FirstSubviewOfClass(done, [UILabel class], 0);
-    if (label.font) _label.font = [UIFont systemFontOfSize:label.font.pointSize weight:UIFontWeightBold];
+    if (label.font && label.font.pointSize >= 12.0 && label.font.pointSize <= 17.0) {
+        _label.font = [UIFont systemFontOfSize:label.font.pointSize weight:UIFontWeightBold];
+    }
     if (label.textColor) _label.textColor = label.textColor;
     [self setNeedsLayout];
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
     CGSize text = [_label sizeThatFits:CGSizeMake(300.0, 100.0)];
-    return CGSizeMake(ceil(text.width) + 30.0, MAX(28.0, ceil(text.height) + 12.0));
+    return CGSizeMake(ceil(text.width) + 24.0, 26.0);
 }
 
 - (void)layoutSubviews {
@@ -524,14 +547,16 @@ static void I18LayoutPill(UIView *host) {
     UIView *done = I18DoneFor(host);
     [pill adoptStyleFrom:done];
     CGSize size = [pill sizeThatFits:CGSizeZero];
-    CGPoint center;
     UIWindow *window = host.window;
-    if (done && window) {
-        CGRect doneFrame = [done convertRect:done.bounds toView:nil];
-        size.height = doneFrame.size.height;
-        CGFloat margin = window.bounds.size.width - CGRectGetMaxX(doneFrame);
-        CGPoint inWindow = CGPointMake(margin + size.width * 0.5, CGRectGetMidY(doneFrame));
-        center = [container convertPoint:inWindow fromView:nil];
+    CGPoint center;
+    if (window) {
+        // Always on screen: 16 pt from the left edge, level with the "+"
+        // (and so with "Done"), whatever the "+" or its container look like.
+        CGRect plus = [host convertRect:host.bounds toView:nil];
+        CGFloat midY = CGRectGetMidY(plus);
+        if (done.window == window) midY = CGRectGetMidY([done convertRect:done.bounds toView:nil]);
+        CGFloat left = 16.0 + window.safeAreaInsets.left;
+        center = [container convertPoint:CGPointMake(left + size.width * 0.5, midY) fromView:nil];
     } else {
         CGRect frame = host.frame;
         center = CGPointMake(CGRectGetMinX(frame) + size.width * 0.5, CGRectGetMidY(frame));
@@ -592,19 +617,6 @@ static Class I18HostClassFor(Class base) {
     return host;
 }
 
-@interface I18PillTarget : NSObject
-@property (nonatomic, weak) UIView *pill;
-@property (nonatomic, weak) UIView *host;
-- (void)tapped;
-@end
-
-@implementation I18PillTarget
-- (void)tapped {
-    if (self.pill) [[I18PlusMenu shared] showBelowView:self.pill stock:self.host];
-}
-@end
-
-static const void *kPillTargetKey = &kPillTargetKey;
 
 /// The whole "+" (its blur circle included): the found view and its parents
 /// of the same size.
@@ -627,11 +639,12 @@ static void I18AttachPill(UIView *host) {
     I18EditPill *pill = objc_getAssociatedObject(host, kPillKey);
     if (!pill) {
         pill = [[I18EditPill alloc] initWithFrame:CGRectZero];
-        I18PillTarget *target = [[I18PillTarget alloc] init];
-        target.pill = pill;
-        target.host = host;
-        objc_setAssociatedObject(pill, kPillTargetKey, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [pill addTarget:target action:@selector(tapped) forControlEvents:UIControlEventTouchUpInside];
+        __weak I18EditPill *weakPill = pill;
+        __weak UIView *weakHost = host;
+        pill.onTap = ^{
+            I18EditPill *strongPill = weakPill;
+            if (strongPill) [[I18PlusMenu shared] showBelowView:strongPill stock:weakHost];
+        };
         objc_setAssociatedObject(host, kPillKey, pill, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (!I18IsHostClass(object_getClass(host))) {

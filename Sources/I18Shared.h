@@ -94,6 +94,8 @@ void I18VerifyLayerTree(CALayer *root);
 /// Pictures without a plate are left as they are in Dark - except the few
 /// apps marked here (Maps), whose picture is darkened instead.
 void I18SetLayerBusyDark(CALayer *layer, BOOL busyDark);
+/// The app of the icon a layer shows (for icon packs, see I18Contents.m).
+void I18SetLayerBundleID(CALayer *layer, NSString * _Nullable bundleID);
 
 /// The resolved look used by the layer subclass (kept in a plain global so it
 /// can be read from any thread).
@@ -106,6 +108,7 @@ typedef NS_ENUM(NSInteger, I18TintKind) {
     I18TintIcon = 1,
     I18TintWidget = 2,
     I18TintBadge = 3,
+    I18TintWidgetLight = 4,   // widgets that stay light (Weather)
 };
 
 /// Builds the colour matrix filter used for tinted icons, widgets, badges.

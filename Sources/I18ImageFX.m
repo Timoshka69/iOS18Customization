@@ -282,6 +282,9 @@ static bool fx_fit_plate(const uint8_t *px, int bpr, int bx0, int by0, int bw, i
 /// Light, greyish areas (the paper of a map, white backgrounds) are taken
 /// down hard so the icon reads as a dark icon; colourful parts are only
 /// dimmed a little, so the icon stays recognisable.
+/// Busy artwork that has a dark version in iOS 18 (Maps): the map itself
+/// becomes dark grey (roads lighter than land, like the iOS 18 icon), only
+/// strong colours (the blue route, the arrow) keep their colour.
 static I18FXResult fx_busy_dark(uint8_t *px, int bpr, int x0, int y0, int w, int h, float amount) {
     for (int y = y0; y < y0 + h; y++) {
         uint8_t *row = px + (size_t)y * bpr;
@@ -291,9 +294,14 @@ static I18FXResult fx_busy_dark(uint8_t *px, int bpr, int x0, int y0, int w, int
             float a = fx_load(p, c);
             if (a <= 0.0f) continue;
             float L = fx_luma(c), S = fx_sat(c);
-            float paper = fx_smoothstep(0.42f, 0.86f, L) * (1.0f - fx_smoothstep(0.18f, 0.48f, S));
-            float k = amount * (1.0f - 0.70f * paper);
-            float o[3] = {c[0] * k, c[1] * k, c[2] * k};
+            float hh, ss, vv;
+            I18FXRGBToHSV(c, &hh, &ss, &vv);
+            // Blue / red markings stay; greens and yellows of the map do not.
+            bool keepHue = (hh > 0.52f && hh < 0.75f) || hh < 0.03f || hh > 0.95f;
+            float keep = keepHue ? fx_smoothstep(0.45f, 0.70f, S) * fx_smoothstep(0.35f, 0.60f, vv) : 0.0f;
+            float grey = 0.09f + 0.36f * L * L * L;
+            float o[3];
+            for (int k = 0; k < 3; k++) o[k] = fx_lerp(grey, c[k] * amount, keep);
             fx_store(p, o, a);
         }
     }
@@ -423,7 +431,7 @@ static uint8_t *fx_enclosed_islands(const uint8_t *px, int bpr, int x0, int y0, 
     return keep;
 }
 
-static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, int h, int flags) {
+static I18FXResult fx_dark_region_core(uint8_t *px, int bpr, int x0, int y0, int w, int h, int flags) {
     // Opaque bounding box.
     int bx0 = x0 + w, by0 = y0 + h, bx1 = -1, by1 = -1;
     for (int y = y0; y < y0 + h; y++) {
@@ -457,12 +465,14 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
         // No clean plate (pictures, games, photos): not an icon that can be
         // given a dark background without spoiling it. Left exactly as it
         // is - only Maps-like artwork is darkened when asked for.
-        if (flags & I18FXFlagBusyDark) return fx_busy_dark(px, bpr, x0, y0, w, h, (flags & I18FXFlagStrongDim) ? 0.66f : 0.86f);
+        if (flags & I18FXFlagBusyDark) return fx_busy_dark(px, bpr, x0, y0, w, h, 0.95f);
         return I18FXUnsupported;
     }
     bool dark = true;
     for (int k = 0; k < 4; k++) dark = dark && fx_luma(corners[k]) < 0.26f;
-    if (dark) return I18FXUntouched; // already a dark icon
+    // Already a dark icon. For Tinted it still goes through: its glyph is
+    // separated from the plate like any other.
+    if (dark && !(flags & I18FXFlagStrongDim)) return I18FXUntouched;
 
     float bgL = fx_luma(mid), bgS = fx_sat(mid);
     // White plates (Calendar, Reminders, Photos): black text turns light.
@@ -626,7 +636,17 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
             }
 
             float o[3];
-            for (int k = 0; k < 3; k++) o[k] = dark[k] * (1.0f - m) + f[k] * m;
+            if (flags & I18FXFlagStrongDim) {
+                // Tinted: grey levels for the colour matrix. The plate is an
+                // even near-black, the glyph sits high in the range (so it
+                // shows the full tint) and keeps a little of its shading.
+                float plateGrey = fx_lerp(0.085f, 0.060f, t);
+                float glyphGrey = 0.36f + 0.44f * fx_luma(f);
+                float v = plateGrey * (1.0f - m) + glyphGrey * m;
+                o[0] = o[1] = o[2] = v;
+            } else {
+                for (int k = 0; k < 3; k++) o[k] = dark[k] * (1.0f - m) + f[k] * m;
+            }
             fx_store(p, o, a);
         }
     }
@@ -634,6 +654,19 @@ static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, i
     free(near);
     free(soft);
     free(keep);
+    return I18FXConverted;
+}
+
+static void fx_tint_ready_region(uint8_t *px, int bpr, int x0, int y0, int w, int h);
+static void fx_tint_art_region(uint8_t *px, int bpr, int x0, int y0, int w, int h);
+
+/// One icon. For Tinted the result is always grey levels ready for the
+/// colour matrix, whatever kind of icon it was.
+static I18FXResult fx_dark_region(uint8_t *px, int bpr, int x0, int y0, int w, int h, int flags) {
+    I18FXResult result = fx_dark_region_core(px, bpr, x0, y0, w, h, flags);
+    if (!(flags & I18FXFlagStrongDim) || result == I18FXConverted) return result;
+    if (result == I18FXUnsupported) fx_tint_art_region(px, bpr, x0, y0, w, h);
+    else fx_tint_ready_region(px, bpr, x0, y0, w, h);
     return I18FXConverted;
 }
 
@@ -716,10 +749,17 @@ I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytes
 
     // Long and thin: a clock hand or a separator, not an icon.
     if (width > height * 2.2f || height > width * 2.2f) {
-        return fx_light_hand(px, width, height, bytesPerRow);
+        I18FXResult result = fx_light_hand(px, width, height, bytesPerRow);
+        if (!(flags & I18FXFlagStrongDim)) return result;
+        fx_tint_ready_region(px, bytesPerRow, 0, 0, width, height);
+        return I18FXConverted;
     }
 
-    if (flags & I18FXFlagClock) return fx_dark_clock(px, width, height, bytesPerRow);
+    if (flags & I18FXFlagClock) {
+        I18FXResult result = fx_dark_clock(px, width, height, bytesPerRow);
+        if (flags & I18FXFlagStrongDim) fx_tint_ready_region(px, bytesPerRow, 0, 0, width, height);
+        return result;
+    }
 
     int *cols = calloc((size_t)width, sizeof(int));
     int *rows = calloc((size_t)height, sizeof(int));
@@ -767,22 +807,17 @@ I18FXResult I18FXMakeDarkWithFlags(uint8_t *px, int width, int height, int bytes
 
 #pragma mark - tinted
 
-void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow) {
-    // A colour matrix can only use linear luma, which makes saturated blue or
-    // red glyphs look muddy once tinted. iOS 18 keeps them bright, so the
-    // brightness is baked into a grey image here and the on-screen filter only
-    // has to map grey -> tint colour.
-    for (int y = 0; y < height; y++) {
-        uint8_t *row = px + (size_t)y * bytesPerRow;
-        for (int x = 0; x < width; x++) {
+static void fx_tint_ready_region(uint8_t *px, int bpr, int x0, int y0, int w, int h) {
+    // Brightness as grey levels, saturated glyphs kept bright (a colour
+    // matrix alone would make red or blue glyphs muddy).
+    for (int y = y0; y < y0 + h; y++) {
+        uint8_t *row = px + (size_t)y * bpr;
+        for (int x = x0; x < x0 + w; x++) {
             uint8_t *p = row + x * 4;
             float c[3];
             float a = fx_load(p, c);
             if (a <= 0.0f) continue;
             float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
-            // Slight curve keeps light details (needles, ticks) apart from the glyph.
-            // Glyphs come out at the full tint like in iOS 18, the dark plate
-            // stays dark; the curve keeps light details apart from the glyph.
             float g = powf(0.50f * mx + 0.50f * fx_luma(c), 1.45f);
             float o[3] = {g, g, g};
             fx_store(p, o, a);
@@ -790,16 +825,17 @@ void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow) {
     }
 }
 
-void I18FXMakeTintReadyArt(uint8_t *px, int width, int height, int bytesPerRow) {
+static void fx_tint_art_region(uint8_t *px, int bpr, int x0, int y0, int w, int h) {
     // Pictures without a plate are only recoloured, but always end up as a
     // dark tile like every other tinted icon: a mostly light picture has its
     // brightness turned around (light background -> dark, drawing -> tint),
-    // a dark one keeps it.
+    // a dark one keeps it. A steep curve keeps it crisp instead of a muddy
+    // half-tone.
     double sum = 0.0;
     size_t count = 0;
-    for (int y = 0; y < height; y++) {
-        const uint8_t *row = px + (size_t)y * bytesPerRow;
-        for (int x = 0; x < width; x++) {
+    for (int y = y0; y < y0 + h; y++) {
+        const uint8_t *row = px + (size_t)y * bpr;
+        for (int x = x0; x < x0 + w; x++) {
             float c[3];
             if (fx_load(row + x * 4, c) > 0.5f) {
                 sum += 0.5f * fmaxf(c[0], fmaxf(c[1], c[2])) + 0.5f * fx_luma(c);
@@ -808,19 +844,28 @@ void I18FXMakeTintReadyArt(uint8_t *px, int width, int height, int bytesPerRow) 
         }
     }
     bool light = count && sum / (double)count > 0.55;
-    for (int y = 0; y < height; y++) {
-        uint8_t *row = px + (size_t)y * bytesPerRow;
-        for (int x = 0; x < width; x++) {
+    for (int y = y0; y < y0 + h; y++) {
+        uint8_t *row = px + (size_t)y * bpr;
+        for (int x = x0; x < x0 + w; x++) {
             uint8_t *p = row + x * 4;
             float c[3];
             float a = fx_load(p, c);
             if (a <= 0.0f) continue;
             float v = 0.5f * fmaxf(c[0], fmaxf(c[1], c[2])) + 0.5f * fx_luma(c);
-            float g = light ? 0.04f + 0.86f * powf(1.0f - v, 1.15f) : 0.04f + 0.86f * powf(v, 1.3f);
+            if (light) v = 1.0f - v;
+            float g = 0.06f + 0.74f * fx_smoothstep(0.12f, 0.85f, v);
             float o[3] = {g, g, g};
             fx_store(p, o, a);
         }
     }
+}
+
+void I18FXMakeTintReady(uint8_t *px, int width, int height, int bytesPerRow) {
+    fx_tint_ready_region(px, bytesPerRow, 0, 0, width, height);
+}
+
+void I18FXMakeTintReadyArt(uint8_t *px, int width, int height, int bytesPerRow) {
+    fx_tint_art_region(px, bytesPerRow, 0, 0, width, height);
 }
 
 #pragma mark - matrices
@@ -879,14 +924,18 @@ static I18FXMatrix fx_luma_ramp(const float tint[3], const float plate[3], float
 
 I18FXMatrix I18FXIconTintMatrix(const float rgb[3]) {
     float plate[3];
-    for (int i = 0; i < 3; i++) plate[i] = rgb[i] * 0.13f + 0.016f;
+    // iOS 18: a near-black plate with only a breath of the tint.
+    for (int i = 0; i < 3; i++) plate[i] = rgb[i] * 0.045f + 0.05f;
     return fx_luma_ramp(rgb, plate, 0.06f, 0.78f, false);
 }
 
 I18FXMatrix I18FXWidgetTintMatrix(const float rgb[3], bool lightContent) {
     float plate[3];
-    for (int i = 0; i < 3; i++) plate[i] = rgb[i] * 0.19f + 0.018f;
-    return fx_luma_ramp(rgb, plate, 0.10f, 0.88f, lightContent);
+    for (int i = 0; i < 3; i++) plate[i] = rgb[i] * 0.09f + 0.05f;
+    // Widgets that stay light (Weather: a sky picture behind white text)
+    // need a steep ramp: the picture becomes the dark plate, the text tint.
+    if (lightContent) return fx_luma_ramp(rgb, plate, 0.66f, 0.95f, false);
+    return fx_luma_ramp(rgb, plate, 0.10f, 0.88f, false);
 }
 
 I18FXMatrix I18FXBadgeTintMatrix(const float rgb[3]) {

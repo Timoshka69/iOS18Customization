@@ -51,8 +51,97 @@ static id I18SourceContents(id contents) {
     return source ?: contents;
 }
 
-static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDark) {
+#pragma mark - Icon packs
+
+// Hand-made dark icons are used when the user has an icon pack installed:
+// a folder of "<bundle id>.png" files (square, unmasked, any size), the same
+// layout as the IconBundles folder of Homescreen18 and SnowBoard themes.
+// The tweak itself ships no icons.
+
+static NSArray<NSString *> *I18PackDirectories(void) {
+    static NSArray<NSString *> *directories;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray<NSString *> *candidates = @[
+            @"/var/jb/Library/Application Support/iOS18Customization/IconBundles",
+            @"/Library/Application Support/iOS18Customization/IconBundles",
+            @"/var/jb/Library/Application Support/homescreen18/IconBundles",
+            @"/Library/Application Support/homescreen18/IconBundles",
+        ];
+        NSMutableArray<NSString *> *found = [NSMutableArray array];
+        for (NSString *path in candidates) {
+            BOOL isDirectory = NO;
+            if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory) [found addObject:path];
+        }
+        directories = found;
+    });
+    return directories;
+}
+
+static id I18PackImage(NSString *bundleID) {
+    if (bundleID.length == 0 || [bundleID containsString:@"/"]) return nil;
+    // Calendar and Clock draw the date / time into their icon themselves.
+    if ([bundleID isEqualToString:@"com.apple.mobilecal"] || [bundleID isEqualToString:@"com.apple.mobiletimer"]) return nil;
+    NSArray<NSString *> *directories = I18PackDirectories();
+    if (directories.count == 0) return nil;
+    static NSCache *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        cache = [[NSCache alloc] init];
+        cache.countLimit = 200;
+    });
+    id cached = [cache objectForKey:bundleID];
+    if (cached) return cached == [NSNull null] ? nil : cached;
+    id result = nil;
+    for (NSString *directory in directories) {
+        NSString *path = [directory stringByAppendingPathComponent:[bundleID stringByAppendingString:@".png"]];
+        UIImage *image = [UIImage imageWithContentsOfFile:path];
+        if (image.CGImage) {
+            result = (__bridge id)image.CGImage;
+            break;
+        }
+    }
+    [cache setObject:result ?: [NSNull null] forKey:bundleID];
+    return result;
+}
+
+/// The pack icon in the size and with the rounded shape of SpringBoard's own
+/// image (its alpha is the mask). NULL when it cannot be built.
+static CGContextRef I18CreatePackContext(CGImageRef source, CGImageRef pack) {
+    size_t width = CGImageGetWidth(source), height = CGImageGetHeight(source);
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef mask = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(space);
+    if (!mask || !context) {
+        if (mask) CGContextRelease(mask);
+        if (context) CGContextRelease(context);
+        return NULL;
+    }
+    CGRect rect = CGRectMake(0, 0, width, height);
+    CGContextSetBlendMode(mask, kCGBlendModeCopy);
+    CGContextDrawImage(mask, rect, source);
+    CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+    CGContextSetBlendMode(context, kCGBlendModeCopy);
+    CGContextDrawImage(context, rect, pack);
+
+    const uint8_t *alpha = CGBitmapContextGetData(mask);
+    uint8_t *pixels = CGBitmapContextGetData(context);
+    size_t maskRow = CGBitmapContextGetBytesPerRow(mask), row = CGBitmapContextGetBytesPerRow(context);
+    for (size_t y = 0; y < height; y++) {
+        for (size_t x = 0; x < width; x++) {
+            unsigned int a = alpha[y * maskRow + x * 4 + 3];
+            uint8_t *p = pixels + y * row + x * 4;
+            for (int k = 0; k < 4; k++) p[k] = (uint8_t)((p[k] * a + 127) / 255);
+        }
+    }
+    CGContextRelease(mask);
+    return context;
+}
+
+static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDark, NSString *bundleID) {
     if (look == I18LookStock || !I18IsCGImage(source)) return source;
+    id pack = clockFace ? nil : I18PackImage(bundleID);
 
     CGImageRef image = (__bridge CGImageRef)source;
     size_t width = CGImageGetWidth(image);
@@ -65,29 +154,34 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
         gImageCache.countLimit = 900;
     });
     BOOL tinted = look == I18LookTinted;
-    NSString *key = [NSString stringWithFormat:@"%p:%d:%d:%d", image, tinted, clockFace, busyDark];
+    NSString *key = [NSString stringWithFormat:@"%p:%d:%d:%d:%@", image, tinted, clockFace, busyDark, pack ? bundleID : @""];
     id cached = [gImageCache objectForKey:key];
     if ([cached isKindOfClass:[NSArray class]]) return source; // known to need no change
     if (cached) return cached;
 
-    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space,
-                                                 kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-    CGColorSpaceRelease(space);
-    if (!context) return source;
-
-    CGContextSetBlendMode(context, kCGBlendModeCopy);
-    CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+    CGContextRef context = NULL;
+    if (pack) context = I18CreatePackContext(image, (__bridge CGImageRef)pack);
+    if (!context) {
+        pack = nil;
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(space);
+        if (!context) return source;
+        CGContextSetBlendMode(context, kCGBlendModeCopy);
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+    }
     uint8_t *pixels = CGBitmapContextGetData(context);
     int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
 
     int flags = (clockFace ? I18FXFlagClock : 0) | (tinted ? I18FXFlagStrongDim : 0) | (busyDark ? I18FXFlagBusyDark : 0);
-    I18FXResult result = I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
+    // A pack icon already is the dark icon; for Tinted it is separated into
+    // plate and glyph like every other icon.
+    I18FXResult result = (pack && !tinted) ? I18FXConverted : I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
     if (tinted) {
         // Icons with a plate: dark plate, glyph in the tint. Pictures without
         // one: only recoloured (still a dark tile), never cut apart.
-        if (result == I18FXUnsupported) I18FXMakeTintReadyArt(pixels, (int)width, (int)height, bytesPerRow);
-        else I18FXMakeTintReady(pixels, (int)width, (int)height, bytesPerRow);
+        // (With the Tinted flag the conversion already leaves grey levels.)
+        (void)result;
     } else if (result == I18FXUntouched || result == I18FXUnsupported) {
         // Dark look: an icon without a clean plate stays exactly as it is.
         CGContextRelease(context);
@@ -129,12 +223,29 @@ void I18SetLayerBusyDark(CALayer *layer, BOOL busyDark) {
     objc_setAssociatedObject(layer, kBusyDarkKey, busyDark ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+static const void *kBundleIDKey = &kBundleIDKey;
+
+void I18SetLayerBundleID(CALayer *layer, NSString *bundleID) {
+    if (!layer) return;
+    NSString *current = objc_getAssociatedObject(layer, kBundleIDKey);
+    if (current == bundleID || [current isEqualToString:bundleID]) return;
+    objc_setAssociatedObject(layer, kBundleIDKey, bundleID, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+
 static id I18DisplayContentsForLayer(CALayer *layer, id original) {
     if (!I18IsCGImage(original)) return original;
     BOOL clockFace = [objc_getAssociatedObject(layer, kClockFaceKey) boolValue];
+    CALayer *parent = layer.superlayer;
     BOOL busyDark = [objc_getAssociatedObject(layer, kBusyDarkKey) boolValue] ||
-                    (layer.superlayer && [objc_getAssociatedObject(layer.superlayer, kBusyDarkKey) boolValue]);
-    return I18ConvertedImage(original, gCurrentLook, clockFace, busyDark);
+                    (parent && [objc_getAssociatedObject(parent, kBusyDarkKey) boolValue]);
+    // Only the layer that shows the whole icon (the image view's own layer)
+    // gets the pack icon, never a part of it.
+    NSString *bundleID = objc_getAssociatedObject(layer, kBundleIDKey);
+    if (!bundleID && parent) {
+        CGSize a = layer.bounds.size, b = parent.bounds.size;
+        if (fabs(a.width - b.width) < 1.0 && fabs(a.height - b.height) < 1.0) bundleID = objc_getAssociatedObject(parent, kBundleIDKey);
+    }
+    return I18ConvertedImage(original, gCurrentLook, clockFace, busyDark, bundleID);
 }
 
 static void I18Managed_setContents(CALayer *self, SEL _cmd, id contents) {
@@ -362,6 +473,8 @@ I18FXMatrix I18MatrixForTintKind(I18TintKind kind) {
     switch (kind) {
         case I18TintWidget:
             return I18FXWidgetTintMatrix(rgb, false);
+        case I18TintWidgetLight:
+            return I18FXWidgetTintMatrix(rgb, true);
         case I18TintBadge: {
             float badge[3];
             I18TintBadgeColor(badge);

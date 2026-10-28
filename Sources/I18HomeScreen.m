@@ -155,7 +155,7 @@ static BOOL I18ComputeLargeEligible(UIView *iconView) {
     for (UIView *view = iconView.superview; view && depth < 12; view = view.superview, depth++) {
         if (I18ClassNameContains(view, @"Library") || I18ClassNameContains(view, @"Switcher") ||
             I18ClassNameContains(view, @"Floating") || I18ClassNameContains(view, @"Gallery") ||
-            I18ClassNameContains(view, @"Today")) {
+            I18ClassNameContains(view, @"Today") || I18ClassNameContains(view, @"Spotlight")) {
             return NO;
         }
         if (I18ClassNameContains(view, @"RootIconListView")) return YES;
@@ -170,7 +170,11 @@ static BOOL I18ComputeLargeEligible(UIView *iconView) {
             return !widget && [name rangeOfString:@"Dock"].location != NSNotFound;
         }
     }
-    return NO;
+    // Not in any list: an icon that is being dragged, or one lifted for an
+    // animation. It keeps what it was, so a dragged large icon stays large
+    // and without its label.
+    NSNumber *previous = objc_getAssociatedObject(iconView, kEligibleKey);
+    return previous.boolValue;
 }
 
 /// Home screen pages, dock and Today view. The widget gallery, App Library
@@ -649,12 +653,17 @@ static void I18ForceWidgetAppearance(UIView *part, BOOL dark) {
     I18ForceWidgetAppearanceIn(part, dark, 0);
 }
 
-/// Apps whose icon is a picture (no plate) but has a dark version in iOS 18.
-static BOOL I18IsBusyDarkApp(UIView *imageView) {
+static NSString *I18BundleIDOfImageView(UIView *imageView) {
     UIView *iconView = I18IconViewContaining(imageView);
     id icon = I18Call(iconView, @"icon");
     id bundle = I18Call(icon, @"applicationBundleID");
-    if (![bundle isKindOfClass:[NSString class]]) return NO;
+    return [bundle isKindOfClass:[NSString class]] ? bundle : nil;
+}
+
+/// Apps whose icon is a picture (no plate) but has a dark version in iOS 18.
+static BOOL I18IsBusyDarkApp(UIView *imageView) {
+    NSString *bundle = I18BundleIDOfImageView(imageView);
+    if (!bundle) return NO;
     static NSSet<NSString *> *apps;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -672,6 +681,8 @@ static void I18StyleImageView(UIView *imageView) {
     BOOL clock = I18ClassNameContains(imageView, @"Clock");
 
     I18SetLayerBusyDark(imageView.layer, I18IsBusyDarkApp(imageView));
+    // Folder icons show several apps: no single pack icon for them.
+    I18SetLayerBundleID(imageView.layer, I18ClassNameContains(imageView, @"Folder") ? nil : I18BundleIDOfImageView(imageView));
     I18AdoptLayerTree(imageView.layer, clock);
     I18SetTintFilter(imageView.layer, look == I18LookTinted ? I18TintIcon : I18TintNone);
     // After the filter: the check also refreshes the tint of layers below
@@ -688,6 +699,95 @@ static void I18StyleImageView(UIView *imageView) {
     }
 }
 
+/// Widgets that draw a picture behind white text and have no dark look
+/// (Weather): in Tinted the picture must become the dark plate.
+static BOOL I18IsLightOnlyWidget(UIView *iconView) {
+    static const void *kLightOnlyKey = &kLightOnlyKey;
+    id icon = I18Call(iconView, @"icon");
+    if (!icon) return NO;
+    NSNumber *cached = objc_getAssociatedObject(icon, kLightOnlyKey);
+    if (cached) return cached.boolValue;
+    NSMutableArray *candidates = [NSMutableArray arrayWithObject:icon];
+    for (NSString *key in @[@"activeWidget", @"widget", @"firstWidget"]) {
+        id widget = I18Call(icon, key);
+        if (widget) [candidates addObject:widget];
+    }
+    BOOL lightOnly = NO;
+    for (id candidate in candidates) {
+        id extension = I18Call(candidate, @"extensionBundleIdentifier");
+        NSString *text = [extension isKindOfClass:[NSString class]] ? extension : [candidate description];
+        if ([text rangeOfString:@"com.apple.weather"].location != NSNotFound) lightOnly = YES;
+    }
+    objc_setAssociatedObject(icon, kLightOnlyKey, @(lightOnly), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return lightOnly;
+}
+
+#pragma mark - Labels through SpringBoard itself
+
+// SBIconView has its own "label hidden" switch. When it is there, the large
+// size uses it: SpringBoard then keeps the label hidden through drags,
+// drops and re-layouts itself, instead of us masking a label it keeps
+// re-creating.
+static IMP oV_setLabelHidden;
+static const void *kRequestedLabelHiddenKey = &kRequestedLabelHiddenKey;
+
+static BOOL I18WantsLabelHidden(UIView *iconView) {
+    return [I18Settings shared].largeIcons && I18IsLargeEligible(iconView);
+}
+
+static void hV_setLabelHidden(UIView *self, SEL _cmd, BOOL hidden) {
+    objc_setAssociatedObject(self, kRequestedLabelHiddenKey, @(hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ((void (*)(id, SEL, BOOL))oV_setLabelHidden)(self, _cmd, hidden || I18WantsLabelHidden(self));
+}
+
+static BOOL I18NativeLabelHidden(UIView *iconView) {
+    for (NSString *name in @[@"isLabelHidden", @"labelHidden"]) {
+        SEL sel = NSSelectorFromString(name);
+        if ([iconView respondsToSelector:sel]) return ((BOOL (*)(id, SEL))objc_msgSend)(iconView, sel);
+    }
+    return NO;
+}
+
+static NSArray<UIView *> *I18LabelsOf(UIView *iconView) {
+    NSMutableArray<UIView *> *labels = [NSMutableArray array];
+    for (UIView *part in I18IconViewParts(iconView, nil)) {
+        if (I18IsLabel(part)) [labels addObject:part];
+    }
+    return labels;
+}
+
+/// Returns NO when SpringBoard has no such switch (the mask is used then).
+static BOOL I18ApplyNativeLabel(UIView *iconView, BOOL animated) {
+    if (!oV_setLabelHidden) return NO;
+    BOOL requested = [objc_getAssociatedObject(iconView, kRequestedLabelHiddenKey) boolValue];
+    BOOL want = requested || I18WantsLabelHidden(iconView);
+    if (I18NativeLabelHidden(iconView) == want) return YES;
+    SEL sel = NSSelectorFromString(@"setLabelHidden:");
+    if (!animated || !iconView.window) {
+        ((void (*)(id, SEL, BOOL))oV_setLabelHidden)(iconView, sel, want);
+        return YES;
+    }
+    NSArray<UIView *> *labels = I18LabelsOf(iconView);
+    if (want) {
+        // Fade out, then hide.
+        [UIView animateWithDuration:0.22 animations:^{
+            for (UIView *label in labels) label.alpha = 0.0;
+        } completion:^(__unused BOOL finished) {
+            ((void (*)(id, SEL, BOOL))oV_setLabelHidden)(iconView, sel, I18WantsLabelHidden(iconView) ||
+                [objc_getAssociatedObject(iconView, kRequestedLabelHiddenKey) boolValue]);
+            for (UIView *label in labels) label.alpha = 1.0;
+        }];
+    } else {
+        ((void (*)(id, SEL, BOOL))oV_setLabelHidden)(iconView, sel, NO);
+        NSArray<UIView *> *shown = I18LabelsOf(iconView);
+        for (UIView *label in shown) label.alpha = 0.0;
+        [UIView animateWithDuration:0.28 animations:^{
+            for (UIView *label in shown) label.alpha = 1.0;
+        }];
+    }
+    return YES;
+}
+
 static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL animated) {
     I18Settings *settings = [I18Settings shared];
     I18Look look = I18CurrentLook();
@@ -702,17 +802,20 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
     BOOL homeWidget = widget && I18IsHomeLocation(iconView);
     BOOL darkWidget = homeWidget && look != I18LookStock;
     if (widget) I18ApplyWidgetScale(iconView, large && homeWidget, animated);
+    BOOL nativeLabels = I18ApplyNativeLabel(iconView, animated);
 
     for (UIView *part in I18IconViewParts(iconView, imageView)) {
         if (I18IsLabel(part)) {
-            I18SetLabelHidden(part, large, animated);
+            // With SpringBoard's own switch a mask from earlier is taken off.
+            I18SetLabelHidden(part, nativeLabels ? NO : large, animated);
         } else if (I18IsBadge(part)) {
             I18SetTintFilter(part.layer, tinted ? I18TintBadge : I18TintNone);
             if (imageView) I18ShiftCornerView(part, imageView, YES);
         } else if (I18IsCloseBox(part)) {
             if (imageView) I18ShiftCornerView(part, imageView, NO);
         } else if (widget) {
-            I18SetTintFilter(part.layer, (tinted && homeWidget) ? I18TintWidget : I18TintNone);
+            I18TintKind kind = I18IsLightOnlyWidget(iconView) ? I18TintWidgetLight : I18TintWidget;
+            I18SetTintFilter(part.layer, (tinted && homeWidget) ? kind : I18TintNone);
             I18ForceWidgetAppearance(part, darkWidget);
         }
     }
@@ -1079,6 +1182,19 @@ void I18InstallHomeScreenHooks(void) {
     I18HookMethod(gIconViewClass, @selector(layoutSubviews), (IMP)hV_layoutSubviews, &oV_layoutSubviews);
     I18HookMethod(gIconViewClass, @selector(didMoveToWindow), (IMP)hV_didMoveToWindow, &oV_didMoveToWindow);
     I18HookMethod(gIconViewClass, @selector(didMoveToSuperview), (IMP)hV_didMoveToSuperview, &oV_didMoveToSuperview);
+
+    // "- (void)setLabelHidden:(BOOL)" with a matching getter, or nothing.
+    SEL labelSel = NSSelectorFromString(@"setLabelHidden:");
+    Method labelMethod = gIconViewClass ? class_getInstanceMethod(gIconViewClass, labelSel) : NULL;
+    if (labelMethod && method_getNumberOfArguments(labelMethod) == 3 &&
+        ([gIconViewClass instancesRespondToSelector:NSSelectorFromString(@"isLabelHidden")] ||
+         [gIconViewClass instancesRespondToSelector:NSSelectorFromString(@"labelHidden")])) {
+        char argType[16] = {0};
+        method_getArgumentType(labelMethod, 2, argType, sizeof(argType));
+        if (argType[0] == 'B' || argType[0] == 'c') {
+            I18HookMethod(gIconViewClass, labelSel, (IMP)hV_setLabelHidden, &oV_setLabelHidden);
+        }
+    }
 
     // Only hooked when it really is "- (CGRect)iconImageFrame".
     SEL frameSel = NSSelectorFromString(@"iconImageFrame");

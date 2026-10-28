@@ -360,9 +360,9 @@ static const CGFloat kBottomPadding = 24.0;
 }
 
 - (CGFloat)iconSizeForWidth:(CGFloat)width {
-    // Large tiles like iOS 18 (about 70 pt on a 375 pt wide screen).
+    // Tiles like iOS 18 (about 66 pt on a 375 pt wide screen).
     CGFloat column = (width - 2.0 * kSide) / 4.0;
-    return MIN(76.0, floor(column - 13.0));
+    return MIN(68.0, floor(column - 18.0));
 }
 
 - (void)layoutCard {
