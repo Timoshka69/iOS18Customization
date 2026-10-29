@@ -5,26 +5,26 @@
   "tintColor": "#7B5CFF",
   "tabs": [
     {
-      "tabname": "Описание",
+      "tabname": "Details",
       "class": "DepictionStackView",
       "views": [
         {
           "class": "DepictionSubheaderView",
-          "title": "Кастомизация iOS 18 на iOS 15",
+          "title": "iOS 18 Home Screen for iOS 15",
           "useBoldText": true,
           "useBottomMargin": true
         },
         {
           "class": "DepictionMarkdownView",
-          "markdown": "Зажми пустое место на рабочем столе → **Изменить** → **Настроить**.\n\n- **Светлые / Тёмные / Авто / Цвет** — как в iOS 18\n- Цветные иконки, папки, бейджи и **виджеты**\n- **Малые / Крупные** иконки (крупные без подписей, виджеты тоже чуть больше)\n- Два ползунка цвета и **пипетка** с обоев\n- Затемнение обоев\n\nВсё применяется сразу, без респринга. Иконки в приложении «Настройки» тоже становятся тёмными или цветными."
+          "markdown": "Make your home screen look like iOS 18.\n\n- **Light, Dark, Auto and Tinted** icons\n- Tinted **widgets** and badges\n- **Large icons** without labels\n- Color sliders and an **eyedropper**\n- Settings page with switches (purple, of course)\n\n**How to use:** long-press the home screen → tap **+** → **Customize**. Everything changes instantly, no respring.\n\n---\n\n**По-русски:** кастомизация домашнего экрана из iOS 18 на iOS 15 — тёмные и цветные иконки и виджеты, крупные иконки. Зажми рабочий стол → **+** → **Настроить**. Переключатели — в приложении «Настройки» → iOS18Customization."
         },
         {
           "class": "DepictionSeparatorView"
         },
         {
           "class": "DepictionTableTextView",
-          "title": "Версия",
-          "text": "1.9.5"
+          "title": "Version",
+          "text": "1.9.6"
         },
         {
           "class": "DepictionTableTextView",
@@ -33,12 +33,12 @@
         },
         {
           "class": "DepictionTableTextView",
-          "title": "Джейлбрейк",
+          "title": "Jailbreak",
           "text": "Dopamine, palera1n (rootless / rootful)"
         },
         {
           "class": "DepictionTableTextView",
-          "title": "Разработчик",
+          "title": "Developer",
           "text": "Timoshka69"
         },
         {
@@ -46,22 +46,31 @@
         },
         {
           "class": "DepictionTableButtonView",
-          "title": "Исходный код на GitHub",
+          "title": "Source Code on GitHub",
           "action": "https://github.com/Timoshka69/iOS18Customization",
           "openExternal": true
         },
         {
           "class": "DepictionTableButtonView",
-          "title": "Сообщить о проблеме",
+          "title": "Report a Problem",
           "action": "https://github.com/Timoshka69/iOS18Customization/issues",
           "openExternal": true
         }
       ]
     },
     {
-      "tabname": "Изменения",
+      "tabname": "Changelog",
       "class": "DepictionStackView",
       "views": [
+        {
+          "class": "DepictionSubheaderView",
+          "title": "1.9.6",
+          "useBoldText": true
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- Settings page in the Settings app: Tint Icons, Tint Widgets, Tint Icons in Settings\n- Bold + button (styled like Done) instead of \"Edit\"\n- Icons are checked every second: no more icons going dark after paging\n- Simpler description"
+        },
         {
           "class": "DepictionSubheaderView",
           "title": "1.9.5",

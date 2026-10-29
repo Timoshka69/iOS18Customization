@@ -316,7 +316,8 @@ static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
 
 @implementation I18EditPill {
     UIVisualEffectView *_material;
-    UILabel *_label;
+    UIImageView *_plus;
+    UIColor *_glyphColor;
     __weak UIView *_styledFrom;
 }
 
@@ -335,14 +336,14 @@ static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
         tap.delegate = self;
         [self addGestureRecognizer:tap];
 
-        _label = [[UILabel alloc] init];
-        _label.text = I18L(@"Edit");
-        _label.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightBold];
-        _label.textColor = UIColor.labelColor;
-        _label.textAlignment = NSTextAlignmentCenter;
-        _label.userInteractionEnabled = NO;
-        [_material.contentView addSubview:_label];
-        self.accessibilityLabel = _label.text;
+        // iOS 18: a bold "+" in the same capsule as "Done".
+        _glyphColor = UIColor.labelColor;
+        _plus = [[UIImageView alloc] init];
+        _plus.contentMode = UIViewContentModeCenter;
+        _plus.userInteractionEnabled = NO;
+        [_material.contentView addSubview:_plus];
+        [self updateGlyph];
+        self.accessibilityLabel = I18L(@"Edit");
         self.accessibilityTraits = UIAccessibilityTraitButton;
     }
     return self;
@@ -360,31 +361,38 @@ static UIView *I18FirstSubviewOfClass(UIView *view, Class cls, int depth) {
     return NO;
 }
 
-/// Same material and text colour as SpringBoard's "Done" pill, but a bold
-/// title (iOS 18). Its size is not copied: the pill keeps its own compact one.
+- (void)updateGlyph {
+    UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightBold];
+    UIImage *plus = [UIImage systemImageNamed:@"plus" withConfiguration:configuration];
+    _plus.image = [plus imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    _plus.tintColor = _glyphColor;
+}
+
+/// Same material and glyph colour as SpringBoard's "Done" capsule.
 - (void)adoptStyleFrom:(UIView *)done {
     if (!done || done == _styledFrom) return;
     _styledFrom = done;
     UIVisualEffectView *material = (UIVisualEffectView *)I18FirstSubviewOfClass(done, [UIVisualEffectView class], 0);
     if (material.effect) _material.effect = material.effect;
     UILabel *label = (UILabel *)I18FirstSubviewOfClass(done, [UILabel class], 0);
-    if (label.font && label.font.pointSize >= 12.0 && label.font.pointSize <= 17.0) {
-        _label.font = [UIFont systemFontOfSize:label.font.pointSize weight:UIFontWeightBold];
-    }
-    if (label.textColor) _label.textColor = label.textColor;
+    if (label.textColor) _glyphColor = label.textColor;
+    [self updateGlyph];
     [self setNeedsLayout];
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
-    CGSize text = [_label sizeThatFits:CGSizeMake(300.0, 100.0)];
-    return CGSizeMake(ceil(text.width) + 24.0, 26.0);
+    CGFloat height = 28.0;
+    UIView *done = _styledFrom;
+    if (done && done.bounds.size.height >= 22.0 && done.bounds.size.height <= 36.0) height = done.bounds.size.height;
+    return CGSizeMake(round(height * 1.55), height);
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     _material.frame = self.bounds;
     _material.layer.cornerRadius = self.bounds.size.height * 0.5;
-    _label.frame = _material.contentView.bounds;
+    _material.layer.cornerCurve = kCACornerCurveContinuous;
+    _plus.frame = _material.contentView.bounds;
 }
 
 - (void)setHighlighted:(BOOL)highlighted {

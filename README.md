@@ -5,158 +5,71 @@
 <h1 align="center">iOS18Customization</h1>
 
 <p align="center">
-  Кастомизация домашнего экрана из iOS 18 — на iOS 15.<br>
-  Светлые, тёмные, авто и цветные (Tinted) иконки, цветные виджеты, крупные иконки без подписей.
+  The iOS 18 home screen on iOS 15.<br>
+  Dark and tinted icons and widgets, large icons, and the iOS 18 customize menu.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/iOS-15.0%20–%2015.8.x-blue">
-  <img src="https://img.shields.io/badge/jailbreak-rootless%20%7C%20rootful-6f42c1">
+  <img src="https://img.shields.io/badge/iOS-15.0%20–%2015.8.x-7B5CFF">
+  <img src="https://img.shields.io/badge/jailbreak-rootless%20%7C%20rootful-7B5CFF">
   <img src="https://img.shields.io/badge/arch-arm64%20%7C%20arm64e-lightgrey">
   <img src="https://github.com/Timoshka69/iOS18Customization/actions/workflows/main.yml/badge.svg">
 </p>
 
 ---
 
-## Что умеет
+## Features
 
-Всё как в iOS 18: зажимаешь пустое место на рабочем столе, жмёшь **«Изменить»** в левом верхнем углу и выбираешь **«Настроить»**. Снизу выезжает маленькая панель — изменения видны сразу, без респринга.
+- **Light, Dark, Auto and Tinted** icons — like iOS 18
+- Tinted **widgets** and notification badges
+- **Small / Large** icons (large ones without labels, widgets grow a little too)
+- Color sliders and an **eyedropper** that picks a color from your wallpaper
+- Wallpaper dimming
+- A **settings page** in the Settings app with switches: Tint Icons, Tint Widgets, Tint Icons in Settings
 
-| | |
-|---|---|
-| **Светлые** | обычные иконки, как в стоке |
-| **Тёмные** | тёмный фон под оригинальным значком — как тёмные иконки iOS 18 (иконки-картинки без фона не трогаются) |
-| **Авто** | светлые днём, тёмные при тёмном оформлении системы (переключаются сами) |
-| **Цвет** | все иконки, папки, бейджи и виджеты окрашиваются в один цвет |
-| **Малые / Крупные** | два «квадрата» вверху панели: крупные иконки и чуть увеличенные виджеты без подписей или обычные с подписями |
-| **Ползунки** | первый — оттенок, второй — от насыщенного цвета до серого (серые иконки как в iOS 18) |
-| **Пипетка** | берёт цвет прямо с обоев (появляется в режиме «Цвет») |
-| **Солнце** | затемняет обои рабочего стола |
+## How to use
 
-Кнопка «Изменить» заменяет «+» режима редактирования, как в iOS 18. Пункт **«Добавить виджет»** в её меню открывает стоковую галерею виджетов.
+1. Long-press an empty spot on the home screen.
+2. Tap the **+** in the top left corner → **Customize**.
+3. Pick a look. Everything changes instantly, no respring.
 
-Подробности:
+The switches live in **Settings → iOS18Customization**.
 
-- Окрашиваются иконки на рабочем столе, в доке, в папках, в библиотеке приложений и в переключателе приложений, часы со стрелками, календарь, бейджи уведомлений.
-- Виджеты окрашиваются в режиме «Цвет» (как Tinted в iOS 18).
-- Нажатие на иконку и блокировка экрана не сбивают окраску.
-- В панели — настоящая иконка «Погоды» с телефона в светлом, тёмном, авто и цветном виде, как в iOS 18.
-- Иконки в списке приложения «Настройки» тоже следуют выбранному виду: тёмные, цветные или стоковые.
-- Отдельной страницы настроек нет — всё делается с рабочего стола, как в iOS 18.
+## Install
 
-## Готовые тёмные иконки (иконпак)
+Download the `.deb` from [Releases](https://github.com/Timoshka69/iOS18Customization/releases) (or **Actions → latest build → Artifacts**):
 
-Твик сам делает тёмные и цветные иконки из обычных. Если хочется точь-в-точь как в iOS 18 — можно положить
-готовые тёмные иконки, твик возьмёт их вместо своих (и для «Тёмных», и для «Цвета»):
+- `..._rootless_iphoneos-arm64.deb` — Dopamine, palera1n rootless
+- `..._rootful_iphoneos-arm.deb` — rootful jailbreaks
 
-```
-/var/jb/Library/Application Support/iOS18Customization/IconBundles/<bundle id>.png
-/var/jb/Library/Application Support/iOS18Customization/SettingsIcons/Bundles/<bundle id фреймворка>/<имя>@2x.png
-```
+Open it in Sileo, Zebra or Filza and install. Needs iOS 15.0 – 15.8.x, ElleKit / Substitute and PreferenceLoader.
 
-- `<bundle id>.png` — квадратная тёмная иконка без скругления (скругление твик сделает сам), например `com.apple.Preferences.png`.
-- Формат совпадает с папками `IconBundles` и `SettingsIcons` твика Homescreen18 и с иконками тем SnowBoard. Если у тебя есть такой пак, просто скопируй эти папки (например, через Filza) в `/var/jb/Library/Application Support/iOS18Customization/` и сделай респринг.
-- Папка `/var/jb/Library/Application Support/homescreen18/` тоже подхватывается автоматически.
-- Сам твик иконок не содержит: это чужие рисунки (Apple и разработчиков приложений), выкладывать их в открытый репозиторий нельзя.
-- Календарь и Часы всегда рисуются твиком (у них живые дата и стрелки).
+## Build
 
-## Совместимость
-
-- **iOS 15.0 – 15.8.x**, iPhone 6s и новее (arm64 и arm64e)
-- **Rootless**: Dopamine, palera1n rootless
-- **Rootful**: palera1n rootful, checkra1n и т.п.
-- Нужен ElleKit или Substitute / Substrate (ставится вместе с джейлбрейком)
-
-На iOS 16+ пакет не ставится специально — для 16–17 есть оригинальный Homescreen18.
-
-## Установка
-
-1. Открой [Releases](https://github.com/Timoshka69/iOS18Customization/releases) (или вкладку **Actions → последняя сборка → Artifacts**).
-2. Скачай нужный файл:
-   - `..._rootless_iphoneos-arm64.deb` — **Dopamine** и palera1n rootless;
-   - `..._rootful_iphoneos-arm.deb` — rootful джейлбрейки.
-3. Открой файл в Sileo / Zebra / Filza → Установить → Respring.
-
-## Как пользоваться
-
-1. Долгое нажатие на пустом месте рабочего стола (иконки начинают дрожать).
-2. Нажми **«Изменить»** слева вверху → **«Настроить»**.
-3. Выбери режим. Для «Цвет» подвигай ползунки или возьми цвет пипеткой с обоев.
-4. «Малые / Крупные» — размер иконок. Тап вне панели или свайп вниз — закрыть.
-
-Сбросить всё к стоку: выбрать «Светлые» и «Малые». Или удалить файл
-`/var/mobile/Library/Preferences/com.timoshka69.ios18customization.plist` и сделать респринг.
-
-## Сборка
-
-### Через GitHub (ничего ставить не надо)
-
-1. Залей репозиторий к себе на GitHub (название репозитория — `iOS18Customization`, тогда иконка и баннер в Sileo подтянутся сами).
-2. Вкладка **Actions** → workflow **Build** запускается сам при каждом push (или вручную: **Run workflow**).
-3. Готовые `.deb` лежат в **Artifacts** у сборки.
-4. Чтобы получился релиз со скачиваемыми файлами — создай тег:
-   ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-
-Workflow: [`.github/workflows/main.yml`](.github/workflows/main.yml) — собирает обе версии (rootless и rootful) на macOS с Theos.
-
-### Локально (Linux / macOS с Theos)
+Push to GitHub — the workflow in [`.github/workflows/main.yml`](.github/workflows/main.yml) builds both packages.
+Locally with Theos:
 
 ```bash
-export THEOS=~/theos
-make package FINALPACKAGE=1                          # rootless
-make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=   # rootful
+make package FINALPACKAGE=1                            # rootless
+make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME= # rootful
 ```
 
-Готовый пакет появится в папке `packages/`.
+## Optional: dark icon pack
 
-## Как это устроено
+The tweak makes dark and tinted icons by itself. If you have hand-made dark icons (Homescreen18 / SnowBoard style,
+`<bundle id>.png`), put them in `/var/jb/Library/Application Support/iOS18Customization/IconBundles/` and respring.
+The tweak ships no icons of its own — they belong to Apple and the app developers.
 
-Коротко, для тех кому интересно:
+## Credits
 
-- **Тёмные иконки** — у iOS 15 их нет, поэтому твик строит их сам: по кольцу у края иконки определяется фон (цвет или градиент в любом направлении, значки, заходящие на край, отбрасываются), он заменяется тёмным градиентом iOS 18, а сам значок остаётся с гладкими краями. Белые значки на цветном фоне (Сообщения, Телефон, App Store) берут цвет фона — как это делает Apple. Иконки-картинки без чистого фона не трогаются (кроме Карт).
-- **Цвет (Tinted)** — иконка переводится в оттенки серого с сохранением яркости значка, а цвет накладывается фильтром Core Animation. Поэтому ползунки работают плавно, без пересчёта картинок.
-- Крупные иконки увеличиваются через размер и вокруг своего центра, поэтому анимации SpringBoard их не обрезают и не сдвигают.
-- Стоковые изображения иконок SpringBoard не трогаются — подменяется только то, что показывается на экране. Переключение обратно на «Светлые» мгновенно возвращает сток.
-- Все хуки проверяются при запуске: если на какой-то версии 15.x нужного метода нет, отключается только эта функция, SpringBoard не падает.
-
-Исходники: [`Sources/`](Sources)
-
-| Файл | Что внутри |
-|---|---|
-| `I18ImageFX.m` | обработка пикселей: тёмные иконки, подготовка к Tinted, цветовые матрицы |
-| `I18Contents.m` | подмена содержимого слоёв иконок, фильтр цвета |
-| `I18HomeScreen.m` | хуки SpringBoard: иконки, бейджи, виджеты, крупный размер |
-| `I18EditButton.m` | кнопка «Изменить» и её меню (Добавить виджет / Настроить) |
-| `I18Panel.m`, `I18Controls.m` | панель кастомизации, ползунки, пипетка |
-| `I18Wallpaper.m` | затемнение обоев, отслеживание светлой/тёмной темы |
-| `I18SettingsApp.m` | иконки в приложении «Настройки» |
-| `I18Settings.m` | настройки и локализация (RU / EN) |
-
-## Если что-то не так
-
-- Иконки не меняются → проверь, что твик включён в ElleKit / Choicy и сделан респринг.
-- Нет кнопки «Изменить» или она не открывает меню → открой issue и напиши версию iOS и джейлбрейк.
-- Безопасный режим / вылет SpringBoard → удали пакет и открой issue, приложи лог.
-
-## Благодарности
-
-- Apple — за дизайн iOS 18, который здесь повторяется.
-- [Homescreen18](https://t.me/evgeniy558) (@evgeniy558, @kirby_swift, @lumid_off) — твик для iOS 16–17, которым вдохновлён этот порт.
-- [Theos](https://theos.dev) и [ElleKit](https://github.com/evelyneee/ellekit).
-
-## Лицензия
-
-MIT — см. [LICENSE](LICENSE).
+Inspired by [Homescreen18](https://t.me/evgeniy558) for iOS 16–17. Built with [Theos](https://theos.dev). MIT license.
 
 ---
 
-### English
+## По-русски
 
-iOS 18 home screen customization for **iOS 15.0 – 15.8.x** (rootless and rootful).
-Long-press the home screen → **Edit** → **Customize**: Light / Dark / Automatic / Tinted icons,
-tinted widgets and badges, Small / Large icons (widgets grow a little too), eyedropper and wallpaper dimming.
-The icons in the Settings app follow the chosen look.
-Grab the `.deb` from Releases (`rootless` for Dopamine) or build it with the included GitHub Actions workflow.
+Домашний экран из iOS 18 на iOS 15: тёмные и цветные иконки и виджеты, крупные иконки без подписей, меню «Настроить» как в iOS 18.
+
+- Зажми пустое место на рабочем столе → нажми **+** слева вверху → **Настроить**.
+- Переключатели «Окрашивать иконки», «Окрашивать виджеты», «Окрашивать в Настройках» — в приложении **Настройки → iOS18Customization**.
+- Установка: `.deb` из Releases или Actions (`rootless` — для Dopamine), открыть в Sileo / Filza.

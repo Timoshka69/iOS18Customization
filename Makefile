@@ -18,3 +18,7 @@ iOS18Customization_CFLAGS = -fobjc-arc -ISources -Wno-deprecated-declarations -W
 iOS18Customization_FRAMEWORKS = UIKit CoreGraphics QuartzCore
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+# The page in the Settings app.
+SUBPROJECTS += Prefs
+include $(THEOS_MAKE_PATH)/aggregate.mk

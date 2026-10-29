@@ -47,8 +47,17 @@ extern NSString *const I18SettingsDidChangeNotification;
 @property (nonatomic) CGFloat tone;     // 0...1, second slider
 @property (nonatomic) BOOL largeIcons;  // "Крупные"
 @property (nonatomic) BOOL dimWallpaper;
+// Switches of the Settings page (iOS18Customization in the Settings app).
+@property (nonatomic, readonly) BOOL tintIcons;
+@property (nonatomic, readonly) BOOL tintWidgets;
+@property (nonatomic, readonly) BOOL tintSettingsApp;
 
 @property (nonatomic, readonly) I18Look look;
+/// The look for icons, widgets and the Settings app list, with the
+/// switches of the Settings page applied.
+@property (nonatomic, readonly) I18Look iconLook;
+@property (nonatomic, readonly) I18Look widgetLook;
+@property (nonatomic, readonly) I18Look settingsAppLook;
 @property (nonatomic, readonly) BOOL systemIsDark;
 
 - (void)tintRGB:(float[_Nonnull 3])rgb;
@@ -101,6 +110,8 @@ void I18SetLayerBundleID(CALayer *layer, NSString * _Nullable bundleID);
 /// can be read from any thread).
 I18Look I18CurrentLook(void);
 void I18SetCurrentLook(I18Look look);
+I18Look I18CurrentWidgetLook(void);
+void I18SetCurrentWidgetLook(I18Look look);
 
 /// What a tinted layer is: decides which colour matrix it gets.
 typedef NS_ENUM(NSInteger, I18TintKind) {
@@ -137,6 +148,9 @@ void I18EndHomeScreenEditing(void);
 void I18SweepHomeScreen(void);
 /// Sweep once the user stops changing things (sliders, eyedropper).
 void I18ScheduleSweep(NSTimeInterval delay);
+/// Checks every icon on screen about once a second and puts any that
+/// SpringBoard changed behind our back back into the current look.
+void I18StartWatchdog(void);
 
 #pragma mark - Edit button (I18EditButton.m)
 
@@ -150,6 +164,8 @@ void I18EditModeChanged(UIView *rootFolderView, BOOL editing);
 void I18InstallSettingsAppHooks(void);
 /// Darwin notification posted by SpringBoard whenever the look changes.
 #define I18_CHANGED_NOTIFICATION "com.timoshka69.ios18customization/changed"
+/// Posted by the Settings page when a switch changes.
+#define I18_PREFS_NOTIFICATION "com.timoshka69.ios18customization/prefs"
 void I18PostChangedNotification(void);
 
 #pragma mark - Wallpaper dim (I18Wallpaper.m)

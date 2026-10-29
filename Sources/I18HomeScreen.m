@@ -812,8 +812,9 @@ static BOOL I18ApplyNativeLabel(UIView *iconView, BOOL animated) {
 
 static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL animated) {
     I18Settings *settings = [I18Settings shared];
-    I18Look look = I18CurrentLook();
+    I18Look look = I18CurrentWidgetLook();
     BOOL tinted = look == I18LookTinted;
+    BOOL badgeTinted = I18CurrentLook() == I18LookTinted;
     BOOL widget = I18IsWidgetIconView(iconView);
     // Large size hides the labels of icons and widgets alike (iOS 18).
     BOOL large = settings.largeIcons && I18IsLargeEligible(iconView);
@@ -834,7 +835,7 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
             (void)nativeLabels;
             I18SetLabelHidden(part, large, animated);
         } else if (I18IsBadge(part)) {
-            I18SetTintFilter(part.layer, tinted ? I18TintBadge : I18TintNone);
+            I18SetTintFilter(part.layer, badgeTinted ? I18TintBadge : I18TintNone);
             if (imageView) I18ShiftCornerView(part, imageView, YES);
         } else if (I18IsCloseBox(part)) {
             if (imageView) I18ShiftCornerView(part, imageView, NO);
@@ -911,10 +912,58 @@ void I18ScheduleSweep(NSTimeInterval delay) {
     });
 }
 
+#pragma mark - Watchdog
+
+/// Light check: only puts right what is wrong (stale look, contents that
+/// SpringBoard replaced, a tint filter that is missing, old or doubled).
+static void I18CheckView(UIView *view, int depth) {
+    if (!view || view.hidden || depth > 40) return;
+    if (gIconImageViewClass && [view isKindOfClass:gIconImageViewClass]) {
+        [gImageViews addObject:view];
+        if (!I18ImageViewIsCurrent(view)) I18StyleImageView(view);
+        else I18VerifyLayerTree(view.layer);
+    } else if (gIconViewClass && [view isKindOfClass:gIconViewClass]) {
+        [gIconViews addObject:view];
+        NSNumber *token = objc_getAssociatedObject(view, kStyledGenerationKey);
+        if (token.unsignedIntegerValue != gStyleGeneration) I18StyleIconView(view, NO, NO);
+    }
+    for (UIView *sub in view.subviews) I18CheckView(sub, depth + 1);
+}
+
+static BOOL I18AppInForeground(void) {
+    SEL frontmost = NSSelectorFromString(@"_accessibilityFrontMostApplication");
+    UIApplication *app = UIApplication.sharedApplication;
+    if (![app respondsToSelector:frontmost]) return NO;
+    return ((id (*)(id, SEL))objc_msgSend)(app, frontmost) != nil;
+}
+
+static void I18WatchdogTick(void) {
+    if (I18CurrentLook() == I18LookStock && I18CurrentWidgetLook() == I18LookStock) return;
+    if (I18AppInForeground()) return;
+    UIWindow *home = I18HomeScreenWindow();
+    UIWindowScene *scene = home.windowScene;
+    NSArray<UIWindow *> *windows = scene ? scene.windows : (home ? @[home] : @[]);
+    for (UIWindow *window in windows) {
+        if (window.hidden || I18ClassNameContains(window, @"I18")) continue;
+        I18CheckView(window, 0);
+        I18FixTintFiltersInTree(window.layer);
+    }
+}
+
+void I18StartWatchdog(void) {
+    static NSTimer *timer;
+    if (timer) return;
+    timer = [NSTimer scheduledTimerWithTimeInterval:0.75 repeats:YES block:^(__unused NSTimer *t) {
+        I18WatchdogTick();
+    }];
+    timer.tolerance = 0.25;
+}
+
 #pragma mark - Public entry points
 
 void I18ApplyLook(BOOL animated) {
-    I18SetCurrentLook([I18Settings shared].look);
+    I18SetCurrentLook([I18Settings shared].iconLook);
+    I18SetCurrentWidgetLook([I18Settings shared].widgetLook);
     gStyleGeneration++;
 
     // One cross-fade per icon covers contents, filters and clock hands.
@@ -945,7 +994,7 @@ void I18ApplyLook(BOOL animated) {
 }
 
 void I18ApplyTint(void) {
-    if (I18CurrentLook() != I18LookTinted) return;
+    if (I18CurrentLook() != I18LookTinted && I18CurrentWidgetLook() != I18LookTinted) return;
     // Called for every slider movement: only the filters are swapped here,
     // on every layer that carries the tint (not just the ones we can find
     // through the icon views right now).
@@ -1228,7 +1277,8 @@ void I18InstallHomeScreenHooks(void) {
     gImageViews = [NSHashTable weakObjectsHashTable];
     gIconViewClass = objc_getClass("SBIconView");
     gIconImageViewClass = objc_getClass("SBIconImageView");
-    I18SetCurrentLook([I18Settings shared].look);
+    I18SetCurrentLook([I18Settings shared].iconLook);
+    I18SetCurrentWidgetLook([I18Settings shared].widgetLook);
     I18InstallFilterHooks();
     I18InstallEditButtonHooks();
 

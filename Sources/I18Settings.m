@@ -17,6 +17,9 @@ static NSString *const kHueKey = @"TintHue";
 static NSString *const kToneKey = @"TintTone";
 static NSString *const kLargeKey = @"LargeIcons";
 static NSString *const kDimKey = @"DimWallpaper";
+static NSString *const kTintIconsKey = @"TintIcons";
+static NSString *const kTintWidgetsKey = @"TintWidgets";
+static NSString *const kTintSettingsKey = @"TintSettings";
 
 @implementation I18Settings {
     NSUserDefaults *_defaults;
@@ -40,6 +43,9 @@ static NSString *const kDimKey = @"DimWallpaper";
             kToneKey: @(0.10),
             kLargeKey: @NO,
             kDimKey: @NO,
+            kTintIconsKey: @YES,
+            kTintWidgetsKey: @YES,
+            kTintSettingsKey: @YES,
         }];
         [self readValues];
     }
@@ -53,6 +59,9 @@ static NSString *const kDimKey = @"DimWallpaper";
     _tone = [self clamp:[_defaults doubleForKey:kToneKey]];
     _largeIcons = [_defaults boolForKey:kLargeKey];
     _dimWallpaper = [_defaults boolForKey:kDimKey];
+    _tintIcons = [_defaults boolForKey:kTintIconsKey];
+    _tintWidgets = [_defaults boolForKey:kTintWidgetsKey];
+    _tintSettingsApp = [_defaults boolForKey:kTintSettingsKey];
 }
 
 - (void)reload {
@@ -123,6 +132,18 @@ static UIUserInterfaceStyle gObservedStyle = UIUserInterfaceStyleUnspecified;
         case I18StyleTinted: return I18LookTinted;
     }
     return I18LookStock;
+}
+
+- (I18Look)iconLook {
+    return _tintIcons ? self.look : I18LookStock;
+}
+
+- (I18Look)widgetLook {
+    return _tintWidgets ? self.look : I18LookStock;
+}
+
+- (I18Look)settingsAppLook {
+    return _tintSettingsApp ? self.look : I18LookStock;
 }
 
 - (void)tintRGB:(float[3])rgb {

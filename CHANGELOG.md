@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.6
+
+- New: settings page in the Settings app (Settings → iOS18Customization) with a purple banner and three switches: Tint Icons, Tint Widgets, Tint Icons in Settings. Changes apply at once. / Новая страница в «Настройках» с переключателями: окрашивать иконки, виджеты и иконки в «Настройках».
+- The "Edit" button is now a bold **+** in the same capsule as "Done". One tap opens Add Widget / Customize. / Вместо «Изменить» — жирный плюс в стиле «Готово».
+- Fixed icons going dark after paging: copies of already converted icons are never converted again (marked picture), stray tint copies are removed, and every icon on screen is checked about once a second. / Иконки больше не темнеют при листании: проверка примерно раз в секунду.
+- Simpler English description in Sileo and on GitHub.
+
 ## 1.9.5
 
 - «Цвет» собран заново: фон иконок теперь точь-в-точь как у тёмных иконок (тот же серый градиент, без оттенка и без черноты), значок — в выбранном цвете, белые детали чуть светлее. Иконка разбирается на «фон» и «значок», и одна цветовая матрица собирает их обратно.

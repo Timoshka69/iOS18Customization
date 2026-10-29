@@ -37,6 +37,22 @@ void I18SetCurrentLook(I18Look look) {
     gCurrentLook = look;
 }
 
+static I18Look gWidgetLook = I18LookStock;
+
+I18Look I18CurrentWidgetLook(void) {
+    return gWidgetLook;
+}
+
+void I18SetCurrentWidgetLook(I18Look look) {
+    gWidgetLook = look;
+}
+
+/// Widgets follow their own switch, everything else the icons.
+static BOOL I18KindTinted(I18TintKind kind) {
+    if (kind == I18TintWidget || kind == I18TintWidgetLight) return gWidgetLook == I18LookTinted;
+    return gCurrentLook == I18LookTinted;
+}
+
 #pragma mark - Image conversion
 
 static BOOL I18IsCGImage(id object) {
@@ -139,6 +155,24 @@ static CGContextRef I18CreatePackContext(CGImageRef source, CGImageRef pack) {
     return context;
 }
 
+// Premultiplied RGBA, alpha 1/255: invisible.
+static const uint8_t kMarker[4] = {1, 0, 1, 1};
+
+static BOOL I18HasMarker(CGImageRef image) {
+    size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
+    uint8_t pixel[4] = {0, 0, 0, 0};
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = CGBitmapContextCreate(pixel, 1, 1, 8, 4, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(space);
+    if (!context) return NO;
+    CGContextSetBlendMode(context, kCGBlendModeCopy);
+    CGContextSetInterpolationQuality(context, kCGInterpolationNone);
+    // Only the top left pixel of the image lands in the 1x1 context.
+    CGContextDrawImage(context, CGRectMake(0, 1.0 - (CGFloat)height, width, height), image);
+    CGContextRelease(context);
+    return memcmp(pixel, kMarker, 4) == 0;
+}
+
 static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDark, NSString *bundleID) {
     if (look == I18LookStock || !I18IsCGImage(source)) return source;
     id pack = clockFace ? nil : I18PackImage(bundleID);
@@ -158,6 +192,15 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
     id cached = [gImageCache objectForKey:key];
     if ([cached isKindOfClass:[NSArray class]]) return source; // known to need no change
     if (cached) return cached;
+
+    // SpringBoard sometimes copies an icon picture (snapshots while paging).
+    // A copy of one of our pictures must never be converted again - that
+    // turned icons nearly black - so every picture we make carries a marker
+    // in its (transparent) top left pixel.
+    if (I18HasMarker(image)) {
+        [gImageCache setObject:@[source] forKey:key];
+        return source;
+    }
 
     CGContextRef context = NULL;
     if (pack) context = I18CreatePackContext(image, (__bridge CGImageRef)pack);
@@ -189,6 +232,9 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
         return source;
     }
 
+    if (pixels[3] == 0) {
+        memcpy(pixels, kMarker, 4);
+    }
     CGImageRef converted = CGBitmapContextCreateImage(context);
     CGContextRelease(context);
     if (!converted) return source;
@@ -510,7 +556,7 @@ static void I18CallSetFilters(CALayer *layer, NSArray *filters) {
 /// keeping whatever SpringBoard has there itself.
 static void I18InstallTintFilter(CALayer *layer, I18TintKind kind) {
     NSArray *current = I18ValueForKey(layer, @"filters");
-    BOOL tinted = kind != I18TintNone && I18CurrentLook() == I18LookTinted;
+    BOOL tinted = kind != I18TintNone && I18KindTinted(kind);
     id filter = tinted ? I18MakeMatrixFilter(I18MatrixForTintKind(kind)) : nil;
     if (filter) objc_setAssociatedObject(filter, kFilterKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(layer, kDesiredFilterKey, filter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -646,7 +692,7 @@ static void hL_setFilters(CALayer *self, SEL _cmd, NSArray *filters) {
         [gTintedLayers addObject:self];
         desired = nil;
     }
-    if (kind != I18TintNone && I18CurrentLook() == I18LookTinted) {
+    if (kind != I18TintNone && I18KindTinted(kind)) {
         NSNumber *generation = objc_getAssociatedObject(self, kTintGenerationKey);
         if (!desired || generation.unsignedIntegerValue != gTintGeneration) {
             desired = I18MakeMatrixFilter(I18MatrixForTintKind(kind));
@@ -692,7 +738,12 @@ static void I18FixTintFilters(CALayer *layer, int depth, BOOL insideTinted) {
             if (kind == I18TintNone) {
                 NSNumber *filterKind = objc_getAssociatedObject(ours, kFilterKindKey);
                 kind = filterKind ? (I18TintKind)filterKind.integerValue : I18TintIcon;
-                if (I18CurrentLook() == I18LookTinted) {
+                // An icon tint is only right on a layer that shows one of our
+                // prepared icon pictures; anywhere else (a page, a container,
+                // a snapshot) it would colour things a second time.
+                BOOL showsOurImage = I18IsCGImage(layer.contents) && objc_getAssociatedObject(layer.contents, kSourceImageKey);
+                if (kind == I18TintIcon && !showsOurImage) kind = I18TintNone;
+                if (kind != I18TintNone && I18KindTinted(kind)) {
                     objc_setAssociatedObject(layer, kTintKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     if (!gTintedLayers) gTintedLayers = [NSHashTable weakObjectsHashTable];
                     [gTintedLayers addObject:layer];
@@ -702,8 +753,8 @@ static void I18FixTintFilters(CALayer *layer, int depth, BOOL insideTinted) {
             }
             NSNumber *generation = objc_getAssociatedObject(layer, kTintGenerationKey);
             id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);
-            if (ours != desired || generation.unsignedIntegerValue != gTintGeneration || I18CurrentLook() != I18LookTinted) {
-                I18InstallTintFilter(layer, I18CurrentLook() == I18LookTinted ? kind : I18TintNone);
+            if (ours != desired || generation.unsignedIntegerValue != gTintGeneration || !I18KindTinted(kind)) {
+                I18InstallTintFilter(layer, I18KindTinted(kind) ? kind : I18TintNone);
             }
         }
     }

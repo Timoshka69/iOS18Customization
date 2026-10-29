@@ -21,6 +21,14 @@ __attribute__((constructor)) static void I18Initialize(void) {
         if (![bundle isEqualToString:@"com.apple.springboard"]) return;
 
         I18InstallHomeScreenHooks();
+        I18StartWatchdog();
+
+        // A switch on the Settings page changed.
+        int prefsToken = 0;
+        notify_register_dispatch(I18_PREFS_NOTIFICATION, &prefsToken, dispatch_get_main_queue(), ^(__unused int t) {
+            [[I18Settings shared] reload];
+            I18ApplyLook(YES);
+        });
 
         // Close the panel when the device locks.
         int lockToken = 0;

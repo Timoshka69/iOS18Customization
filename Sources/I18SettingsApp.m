@@ -93,7 +93,7 @@ static void I18StyleSettingsImageView(UIImageView *imageView) {
     if (!shown) return;
     UIImage *source = objc_getAssociatedObject(shown, kSourceIconKey) ?: shown;
     if (!I18IsSettingsIcon(source)) return;
-    UIImage *wanted = I18SettingsIconForLook(source, [I18Settings shared].look);
+    UIImage *wanted = I18SettingsIconForLook(source, [I18Settings shared].settingsAppLook);
     if (wanted != shown) imageView.image = wanted;
 }
 
@@ -169,7 +169,7 @@ static NSArray<NSString *> *I18SettingsPackDirectories(void) {
 
 static UIImage *I18SettingsPackImage(NSString *name, NSBundle *bundle) {
     if (![name isKindOfClass:[NSString class]] || name.length == 0 || [name containsString:@"/"]) return nil;
-    if ([I18Settings shared].look == I18LookStock) return nil;
+    if ([I18Settings shared].settingsAppLook == I18LookStock) return nil;
     NSString *bundleID = bundle.bundleIdentifier;
     if (bundleID.length == 0) return nil;
     NSArray<NSString *> *directories = I18SettingsPackDirectories();
@@ -229,6 +229,11 @@ void I18InstallSettingsAppHooks(void) {
     // The look was changed on the home screen.
     int token = 0;
     notify_register_dispatch(I18_CHANGED_NOTIFICATION, &token, dispatch_get_main_queue(), ^(__unused int t) {
+        [[I18Settings shared] reload];
+        I18RestyleAllCells();
+    });
+    int prefsToken = 0;
+    notify_register_dispatch(I18_PREFS_NOTIFICATION, &prefsToken, dispatch_get_main_queue(), ^(__unused int t) {
         [[I18Settings shared] reload];
         I18RestyleAllCells();
     });
