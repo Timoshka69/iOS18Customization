@@ -49,6 +49,9 @@ void I18SetCurrentWidgetLook(I18Look look) {
 
 /// Widgets follow their own switch, everything else the icons.
 static BOOL I18KindTinted(I18TintKind kind) {
+    // Icons carry their colour in the picture now (see I18ConvertedImage):
+    // an old icon filter anywhere is taken off.
+    if (kind == I18TintIcon) return NO;
     if (kind == I18TintWidget || kind == I18TintWidgetLight) return gWidgetLook == I18LookTinted;
     return gCurrentLook == I18LookTinted;
 }
@@ -173,6 +176,48 @@ static BOOL I18HasMarker(CGImageRef image) {
     return memcmp(pixel, kMarker, 4) == 0;
 }
 
+static CGContextRef I18CreateRGBAContext(size_t width, size_t height) {
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(space);
+    if (context) CGContextSetBlendMode(context, kCGBlendModeCopy);
+    return context;
+}
+
+/// Tinted icons are coloured right here, in the picture itself, not by a
+/// filter on screen. A picture is a picture: SpringBoard can copy it into
+/// context menus, the app switcher, snapshots while paging - it always shows
+/// the right colour, never an old one, never twice.
+/// The expensive part (dark icon split into plate and glyph) is kept per
+/// icon, so a new colour only costs one quick pass.
+static id I18TintSplitImage(id source, CGImageRef image, BOOL clockFace, BOOL busyDark, id pack, NSString *bundleID) {
+    NSString *key = [NSString stringWithFormat:@"%p:split:%d:%d:%@", image, clockFace, busyDark, pack ? bundleID : @""];
+    id cached = [gImageCache objectForKey:key];
+    if (cached) return cached;
+
+    size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
+    CGContextRef context = pack ? I18CreatePackContext(image, (__bridge CGImageRef)pack) : NULL;
+    if (!context) {
+        pack = nil;
+        context = I18CreateRGBAContext(width, height);
+        if (!context) return nil;
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+    }
+    uint8_t *pixels = CGBitmapContextGetData(context);
+    int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
+    int flags = (clockFace ? I18FXFlagClock : 0) | I18FXFlagForTint | (busyDark ? I18FXFlagBusyDark : 0);
+    // A pack icon already is the dark icon.
+    if (!pack) I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
+    I18FXMakeTintGrey(pixels, (int)width, (int)height, bytesPerRow);
+    CGImageRef split = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    if (!split) return nil;
+    id result = (__bridge_transfer id)split;
+    objc_setAssociatedObject(result, kSourceImageKey, source, OBJC_ASSOCIATION_RETAIN_NONATOMIC); // keeps the key's pointer alive
+    [gImageCache setObject:result forKey:key];
+    return result;
+}
+
 static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDark, NSString *bundleID) {
     if (look == I18LookStock || !I18IsCGImage(source)) return source;
     id pack = clockFace ? nil : I18PackImage(bundleID);
@@ -185,10 +230,14 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         gImageCache = [[NSCache alloc] init];
-        gImageCache.countLimit = 900;
+        gImageCache.countLimit = 1200;
     });
     BOOL tinted = look == I18LookTinted;
-    NSString *key = [NSString stringWithFormat:@"%p:%d:%d:%d:%@", image, tinted, clockFace, busyDark, pack ? bundleID : @""];
+    float rgb[3] = {0, 0, 0};
+    if (tinted) [[I18Settings shared] tintRGB:rgb];
+    NSString *key = tinted
+        ? [NSString stringWithFormat:@"%p:t:%d:%d:%@:%.3f,%.3f,%.3f", image, clockFace, busyDark, pack ? bundleID : @"", rgb[0], rgb[1], rgb[2]]
+        : [NSString stringWithFormat:@"%p:d:%d:%d:%@", image, clockFace, busyDark, pack ? bundleID : @""];
     id cached = [gImageCache objectForKey:key];
     if ([cached isKindOfClass:[NSArray class]]) return source; // known to need no change
     if (cached) return cached;
@@ -203,38 +252,38 @@ static id I18ConvertedImage(id source, I18Look look, BOOL clockFace, BOOL busyDa
     }
 
     CGContextRef context = NULL;
-    if (pack) context = I18CreatePackContext(image, (__bridge CGImageRef)pack);
-    if (!context) {
-        pack = nil;
-        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        context = CGBitmapContextCreate(NULL, width, height, 8, 0, space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-        CGColorSpaceRelease(space);
-        if (!context) return source;
-        CGContextSetBlendMode(context, kCGBlendModeCopy);
-        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
-    }
-    uint8_t *pixels = CGBitmapContextGetData(context);
-    int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
-
-    int flags = (clockFace ? I18FXFlagClock : 0) | (tinted ? I18FXFlagForTint : 0) | (busyDark ? I18FXFlagBusyDark : 0);
-    // A pack icon already is the dark icon (Tinted colourises it as it is).
-    I18FXResult result = pack ? I18FXConverted : I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
     if (tinted) {
-        // The dark icon (or the picture itself) as grey levels; the colour
-        // matrix on screen turns them into the tint.
-        (void)result;
-        I18FXMakeTintGrey(pixels, (int)width, (int)height, bytesPerRow);
-    } else if (result == I18FXUntouched || result == I18FXUnsupported) {
-        // Dark look: an icon without a clean plate stays exactly as it is.
-        CGContextRelease(context);
-        // Keep the source alive together with the entry (see below).
-        [gImageCache setObject:@[source] forKey:key];
-        return source;
+        id split = I18TintSplitImage(source, image, clockFace, busyDark, pack, bundleID);
+        if (!split) return source;
+        context = I18CreateRGBAContext(width, height);
+        if (!context) return source;
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), (__bridge CGImageRef)split);
+        uint8_t *pixels = CGBitmapContextGetData(context);
+        int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
+        I18FXMatrix matrix = I18FXIconTintMatrix(rgb);
+        I18FXApplyMatrix(pixels, (int)width, (int)height, bytesPerRow, &matrix);
+    } else {
+        if (pack) context = I18CreatePackContext(image, (__bridge CGImageRef)pack);
+        if (!context) {
+            pack = nil;
+            context = I18CreateRGBAContext(width, height);
+            if (!context) return source;
+            CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+        }
+        uint8_t *pixels = CGBitmapContextGetData(context);
+        int bytesPerRow = (int)CGBitmapContextGetBytesPerRow(context);
+        int flags = (clockFace ? I18FXFlagClock : 0) | (busyDark ? I18FXFlagBusyDark : 0);
+        I18FXResult result = pack ? I18FXConverted : I18FXMakeDarkWithFlags(pixels, (int)width, (int)height, bytesPerRow, flags);
+        if (result == I18FXUntouched || result == I18FXUnsupported) {
+            // Dark look: an icon without a clean plate stays exactly as it is.
+            CGContextRelease(context);
+            [gImageCache setObject:@[source] forKey:key]; // keeps the source alive with the entry
+            return source;
+        }
     }
 
-    if (pixels[3] == 0) {
-        memcpy(pixels, kMarker, 4);
-    }
+    uint8_t *pixels = CGBitmapContextGetData(context);
+    if (pixels[3] == 0) memcpy(pixels, kMarker, 4);
     CGImageRef converted = CGBitmapContextCreateImage(context);
     CGContextRelease(context);
     if (!converted) return source;

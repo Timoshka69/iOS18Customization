@@ -167,6 +167,11 @@ static id I18P_specifiers(id self, SEL _cmd) {
     if (!specifiers) {
         SEL load = NSSelectorFromString(@"loadSpecifiersFromPlistName:target:");
         specifiers = ((id (*)(id, SEL, NSString *, id))objc_msgSend)(self, load, @"Root", self);
+        if ([specifiers isKindOfClass:[NSArray class]] && [(NSArray *)specifiers count] == 0) {
+            // Older PreferenceLoader paths: give the full path of Root.plist.
+            NSString *path = [[I18PBundle() bundlePath] stringByAppendingPathComponent:@"Root"];
+            specifiers = ((id (*)(id, SEL, NSString *, id))objc_msgSend)(self, load, path, self);
+        }
         if (ivar) object_setIvarWithStrongDefault(self, ivar, specifiers);
     }
     return specifiers;
@@ -197,6 +202,14 @@ static void I18PUpdateHeader(id self) {
         header.frame = CGRectMake(0, 0, width, 150.0);
         table.tableHeaderView = header;
     }
+}
+
+/// PSListController finds Root.plist and the translations through -bundle,
+/// which is +bundleForClass: of the controller's class. This class is made
+/// at runtime, so that would be the Settings app itself (empty page) - the
+/// bundle of this file is the right one.
+static NSBundle *I18P_bundle(id self, SEL _cmd) {
+    return I18PBundle();
 }
 
 static void I18P_viewDidLoad(id self, SEL _cmd) {
@@ -243,6 +256,7 @@ __attribute__((constructor)) static void I18PRegister(void) {
     if (!base || NSClassFromString(kRootClassName)) return;
     Class cls = objc_allocateClassPair(base, kRootClassName.UTF8String, 0);
     if (!cls) return;
+    class_addMethod(cls, NSSelectorFromString(@"bundle"), (IMP)I18P_bundle, "@@:");
     class_addMethod(cls, NSSelectorFromString(@"specifiers"), (IMP)I18P_specifiers, "@@:");
     class_addMethod(cls, @selector(viewDidLoad), (IMP)I18P_viewDidLoad, "v@:");
     class_addMethod(cls, @selector(viewDidLayoutSubviews), (IMP)I18P_viewDidLayoutSubviews, "v@:");

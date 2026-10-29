@@ -24,7 +24,7 @@
         {
           "class": "DepictionTableTextView",
           "title": "Version",
-          "text": "1.9.6"
+          "text": "1.9.7"
         },
         {
           "class": "DepictionTableTextView",
@@ -62,6 +62,15 @@
       "tabname": "Changelog",
       "class": "DepictionStackView",
       "views": [
+        {
+          "class": "DepictionSubheaderView",
+          "title": "1.9.7",
+          "useBoldText": true
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- Tinted icons no longer turn green or dark (colour is now part of the icon picture)\n- Settings page shows its switches"
+        },
         {
           "class": "DepictionSubheaderView",
           "title": "1.9.6",

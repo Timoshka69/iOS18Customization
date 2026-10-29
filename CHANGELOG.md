@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.7
+
+- Fixed for good: icons turning green / dark in context menus, while paging and after the app switcher. Tinted icons now carry their colour in the picture itself instead of a live filter, so every copy SpringBoard makes (context menu preview, snapshots, switcher) shows the right colour. Clock hands follow the tint too. / Иконки больше не зеленеют и не темнеют: цвет теперь «запечён» в саму картинку, а не наложен фильтром, поэтому любые копии иконок (меню по долгому нажатию, листание, переключатель) всегда правильного цвета.
+- Fixed the empty settings page in the Settings app. / Исправлена пустая страница настроек.
+
 ## 1.9.6
 
 - New: settings page in the Settings app (Settings → iOS18Customization) with a purple banner and three switches: Tint Icons, Tint Widgets, Tint Icons in Settings. Changes apply at once. / Новая страница в «Настройках» с переключателями: окрашивать иконки, виджеты и иконки в «Настройках».

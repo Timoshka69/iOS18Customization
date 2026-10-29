@@ -592,7 +592,18 @@ static CGFloat I18NeutralLuma(CGColorRef color) {
 /// Colour a part of the live clock should have in the current look
 /// (+1, caller releases). Thin dark parts (hands, centre dot) turn white,
 /// a big light part (a drawn dial) turns dark. Everything else keeps its colour.
-static CGColorRef I18CopyClockPartColor(CGColorRef original, BOOL dark, CGFloat areaRatio) {
+static CGColorRef I18CopyClockPartColor(CGColorRef original, BOOL dark, BOOL tinted, CGFloat areaRatio) {
+    if (tinted && areaRatio < 0.15 && CGColorGetAlpha(original) > 0.05) {
+        // Hands and the centre dot take the tint (the dial picture has it).
+        float rgb[3];
+        [[I18Settings shared] tintRGB:rgb];
+        CGFloat luma = I18NeutralLuma(original);
+        if (luma < 0.0) {
+            // The coloured second hand: a lighter shade of the tint.
+            return CGColorCreateSRGB(0.6 * rgb[0] + 0.4, 0.6 * rgb[1] + 0.4, 0.6 * rgb[2] + 0.4, CGColorGetAlpha(original));
+        }
+        return CGColorCreateSRGB(rgb[0], rgb[1], rgb[2], CGColorGetAlpha(original));
+    }
     if (dark) {
         CGFloat luma = I18NeutralLuma(original);
         if (luma >= 0.0 && luma < 0.45 && areaRatio < 0.15) {
@@ -607,7 +618,7 @@ static CGColorRef I18CopyClockPartColor(CGColorRef original, BOOL dark, CGFloat 
 
 /// Clock hands are plain coloured layers. In the dark looks the black hands
 /// become white (the dial itself is flipped by the contents conversion).
-static void I18StyleClockParts(CALayer *layer, CGFloat rootArea, BOOL dark, int depth) {
+static void I18StyleClockParts(CALayer *layer, CGFloat rootArea, BOOL dark, BOOL tinted, int depth) {
     if (!layer || depth > 4 || rootArea <= 0.0) return;
     for (CALayer *sublayer in layer.sublayers) {
         if (!sublayer.contents) {
@@ -619,7 +630,7 @@ static void I18StyleClockParts(CALayer *layer, CGFloat rootArea, BOOL dark, int 
                 stored = (__bridge id)background;
             }
             if (stored) {
-                CGColorRef wanted = I18CopyClockPartColor((__bridge CGColorRef)stored, dark, areaRatio);
+                CGColorRef wanted = I18CopyClockPartColor((__bridge CGColorRef)stored, dark, tinted, areaRatio);
                 if (!CGColorEqualToColor(sublayer.backgroundColor, wanted)) sublayer.backgroundColor = wanted;
                 CGColorRelease(wanted);
             }
@@ -631,13 +642,13 @@ static void I18StyleClockParts(CALayer *layer, CGFloat rootArea, BOOL dark, int 
                     storedFill = (__bridge id)shape.fillColor;
                 }
                 if (storedFill) {
-                    CGColorRef wanted = I18CopyClockPartColor((__bridge CGColorRef)storedFill, dark, areaRatio);
+                    CGColorRef wanted = I18CopyClockPartColor((__bridge CGColorRef)storedFill, dark, tinted, areaRatio);
                     if (!CGColorEqualToColor(shape.fillColor, wanted)) shape.fillColor = wanted;
                     CGColorRelease(wanted);
                 }
             }
         }
-        I18StyleClockParts(sublayer, rootArea, dark, depth + 1);
+        I18StyleClockParts(sublayer, rootArea, dark, tinted, depth + 1);
     }
 }
 
@@ -706,14 +717,15 @@ static void I18StyleImageView(UIView *imageView) {
     I18SetLayerBusyDark(imageView.layer, appIcon && I18IsBusyDarkApp(imageView));
     I18SetLayerBundleID(imageView.layer, appIcon ? I18BundleIDOfImageView(imageView) : nil);
     I18AdoptLayerTree(imageView.layer, clock);
-    I18SetTintFilter(imageView.layer, look == I18LookTinted ? I18TintIcon : I18TintNone);
+    // No filter on icons: the colour is in the picture (I18ConvertedImage).
+    I18SetTintFilter(imageView.layer, I18TintNone);
     // After the filter: the check also refreshes the tint of layers below
     // (an old image view SpringBoard keeps inside a cross-fade).
     I18VerifyLayerTree(imageView.layer);
 
     if (clock) {
         CGSize size = imageView.layer.bounds.size;
-        I18StyleClockParts(imageView.layer, size.width * size.height, look != I18LookStock, 0);
+        I18StyleClockParts(imageView.layer, size.width * size.height, look != I18LookStock, look == I18LookTinted, 0);
     }
 
     if (I18ClassNameContains(imageView, @"Folder")) {
@@ -993,12 +1005,38 @@ void I18ApplyLook(BOOL animated) {
     I18PostChangedNotification();
 }
 
+static CFTimeInterval gLastRecolor;
+static BOOL gRecolorPending;
+
+/// Icons carry their colour in the picture: a new colour means new
+/// pictures. At most ~16 times a second while a slider moves, and always
+/// once more after it stops.
+static void I18RecolorIcons(void) {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - gLastRecolor < 0.06) {
+        if (gRecolorPending) return;
+        gRecolorPending = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.07 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            gRecolorPending = NO;
+            I18RecolorIcons();
+        });
+        return;
+    }
+    gLastRecolor = now;
+    I18ReprocessAllContents(NO);
+    gStyleGeneration++;
+    for (UIView *imageView in gImageViews.allObjects) {
+        if (!I18ClassNameContains(imageView, @"Clock")) continue;
+        CGSize size = imageView.layer.bounds.size;
+        I18StyleClockParts(imageView.layer, size.width * size.height, YES, YES, 0);
+    }
+}
+
 void I18ApplyTint(void) {
     if (I18CurrentLook() != I18LookTinted && I18CurrentWidgetLook() != I18LookTinted) return;
-    // Called for every slider movement: only the filters are swapped here,
-    // on every layer that carries the tint (not just the ones we can find
-    // through the icon views right now).
+    // Widgets and badges: their filters get the new colour.
     I18RefreshTintFilters();
+    if (I18CurrentLook() == I18LookTinted) I18RecolorIcons();
     I18PostChangedNotification();
     // Once the slider rests, a full pass catches anything that was off screen.
     I18ScheduleSweep(0.35);
