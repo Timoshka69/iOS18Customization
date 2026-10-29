@@ -15,8 +15,8 @@ iOS18CustomizationPrefs_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-un
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
-# The entry in the Settings list (PreferenceLoader). Installed under the
-# package prefix, so /var/jb/... for rootless and /... for rootful.
+# The entry in the Settings list (PreferenceLoader). Theos moves the staging
+# folder under /var/jb itself for rootless, so no prefix here.
 internal-stage::
-	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences"$(ECHO_END)
-	$(ECHO_NOTHING)cp entry.plist "$(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/iOS18Customization.plist"$(ECHO_END)
+	$(ECHO_NOTHING)mkdir -p "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences"$(ECHO_END)
+	$(ECHO_NOTHING)cp entry.plist "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/iOS18Customization.plist"$(ECHO_END)
