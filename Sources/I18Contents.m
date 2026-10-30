@@ -785,20 +785,12 @@ static void I18FixTintFilters(CALayer *layer, int depth, BOOL insideTinted) {
         if (ours) {
             I18TintKind kind = I18TintKindOf(layer);
             if (kind == I18TintNone) {
-                NSNumber *filterKind = objc_getAssociatedObject(ours, kFilterKindKey);
-                kind = filterKind ? (I18TintKind)filterKind.integerValue : I18TintIcon;
-                // An icon tint is only right on a layer that shows one of our
-                // prepared icon pictures; anywhere else (a page, a container,
-                // a snapshot) it would colour things a second time.
-                BOOL showsOurImage = I18IsCGImage(layer.contents) && objc_getAssociatedObject(layer.contents, kSourceImageKey);
-                if (kind == I18TintIcon && !showsOurImage) kind = I18TintNone;
-                if (kind != I18TintNone && I18KindTinted(kind)) {
-                    objc_setAssociatedObject(layer, kTintKindKey, @(kind), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    if (!gTintedLayers) gTintedLayers = [NSHashTable weakObjectsHashTable];
-                    [gTintedLayers addObject:layer];
-                } else {
-                    kind = I18TintNone;
-                }
+                // A copy SpringBoard made of one of our filters (onto a
+                // reused view, a snapshot, a container). Copies are never
+                // kept: the layers that should be tinted get their own.
+                I18InstallTintFilter(layer, I18TintNone);
+                for (CALayer *sublayer in [layer.sublayers copy]) I18FixTintFilters(sublayer, depth + 1, NO);
+                return;
             }
             NSNumber *generation = objc_getAssociatedObject(layer, kTintGenerationKey);
             id desired = objc_getAssociatedObject(layer, kDesiredFilterKey);

@@ -822,6 +822,46 @@ static BOOL I18ApplyNativeLabel(UIView *iconView, BOOL animated) {
     return YES;
 }
 
+static const void *kWidgetPartKey = &kWidgetPartKey;
+
+static BOOL I18ContainsLabel(UIView *view, int depth) {
+    if (!view || depth > 4) return NO;
+    if (I18IsLabel(view)) return YES;
+    for (UIView *sub in view.subviews) {
+        if (I18ContainsLabel(sub, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+/// The widget's content gets the tint - never a container that also holds
+/// the label under the widget (the label must stay white).
+static void I18TintWidgetPart(UIView *part, I18TintKind kind, int depth) {
+    if (!part || depth > 4) return;
+    if (I18IsLabel(part)) {
+        I18SetTintFilter(part.layer, I18TintNone);
+        return;
+    }
+    if (I18ContainsLabel(part, 0)) {
+        I18SetTintFilter(part.layer, I18TintNone);
+        for (UIView *sub in part.subviews) I18TintWidgetPart(sub, kind, depth + 1);
+        return;
+    }
+    I18SetTintFilter(part.layer, kind);
+}
+
+static void I18ClearWidgetLook(UIView *part, int depth) {
+    if (!part || depth > 4) return;
+    I18SetTintFilter(part.layer, I18TintNone);
+    if (objc_getAssociatedObject(part, kWidgetPartKey)) {
+        I18ForceWidgetAppearance(part, NO);
+        objc_setAssociatedObject(part, kWidgetPartKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    for (UIView *sub in part.subviews) {
+        if (gIconImageViewClass && [sub isKindOfClass:gIconImageViewClass]) continue;
+        I18ClearWidgetLook(sub, depth + 1);
+    }
+}
+
 static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL animated) {
     I18Settings *settings = [I18Settings shared];
     I18Look look = I18CurrentWidgetLook();
@@ -853,10 +893,19 @@ static void I18StyleIconViewParts(UIView *iconView, UIView *imageView, BOOL anim
             if (imageView) I18ShiftCornerView(part, imageView, NO);
         } else if (widget) {
             I18TintKind kind = I18IsLightOnlyWidget(iconView) ? I18TintWidgetLight : I18TintWidget;
-            I18SetTintFilter(part.layer, (tinted && homeWidget) ? kind : I18TintNone);
+            I18TintWidgetPart(part, (tinted && homeWidget) ? kind : I18TintNone, 0);
             I18ForceWidgetAppearance(part, darkWidget);
+            objc_setAssociatedObject(part, kWidgetPartKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        } else {
+            // SpringBoard reuses icon views: one that showed a widget before
+            // may show an app now. Nothing of the widget look may stay on it
+            // (a widget filter left there darkened the icon and coloured
+            // the label).
+            I18ClearWidgetLook(part, 0);
         }
     }
+    // The icon view itself never carries a filter of ours.
+    I18SetTintFilter(iconView.layer, I18TintNone);
 }
 
 static BOOL I18ImageViewIsCurrent(UIView *imageView) {

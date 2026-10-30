@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.8
+
+- Found the real cause of the dark icons with coloured labels (Mail, TV and others): SpringBoard reuses icon views, and one that showed a widget before kept the widget's colour filter when it later showed an app. That filter darkened the icon and coloured its label. Now an icon view that is not a widget never keeps anything of the widget look, the widget tint is never put on a view that holds the label (labels under widgets stay white), and stray copies of the filter are removed. / Найдена настоящая причина тёмных иконок с цветными подписями: SpringBoard переиспользует ячейки, и ячейка от виджета оставляла свой фильтр на иконке приложения. Теперь это убирается, а подписи под виджетами всегда белые.
+
 ## 1.9.7
 
 - Fixed for good: icons turning green / dark in context menus, while paging and after the app switcher. Tinted icons now carry their colour in the picture itself instead of a live filter, so every copy SpringBoard makes (context menu preview, snapshots, switcher) shows the right colour. Clock hands follow the tint too. / Иконки больше не зеленеют и не темнеют: цвет теперь «запечён» в саму картинку, а не наложен фильтром, поэтому любые копии иконок (меню по долгому нажатию, листание, переключатель) всегда правильного цвета.
